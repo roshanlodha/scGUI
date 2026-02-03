@@ -13,9 +13,15 @@ final class AppModel: ObservableObject {
     // Data + settings
     @Published var samples: [SampleMetadata] = []
     @Published var outputDirectory: String = ""
+    @Published var projectName: String = "scanwr-project"
 
     // Logs
     @Published var logs: [String] = []
+
+    // Progress
+    @Published var isRunning: Bool = false
+    @Published var progressPercent: Double = 0
+    @Published var progressMessage: String = ""
 
     private let rpc = PythonRPCClient()
 
@@ -26,13 +32,23 @@ final class AppModel: ObservableObject {
     func ensureBackendStarted() async {
         if rpc.isRunning { return }
         do {
-            try await rpc.start { [weak self] msg in
-                await self?.appendLog(msg)
-            }
+            try await rpc.start(
+                onLog: { [weak self] msg in
+                    await self?.appendLog(msg)
+                },
+                onProgress: { [weak self] ev in
+                    await self?.setProgress(ev)
+                }
+            )
             appendLog("Backend: started")
         } catch {
             appendLog("Backend ERROR: \(error)")
         }
+    }
+
+    func setProgress(_ ev: PythonRPCClient.ProgressEvent) {
+        progressPercent = max(0, min(1, ev.percent))
+        progressMessage = ev.message
     }
 
     func loadModules() async {
@@ -105,18 +121,27 @@ final class AppModel: ObservableObject {
 
     func runPipeline() async {
         let outDir = outputDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
+        let projName = projectName.trimmingCharacters(in: .whitespacesAndNewlines)
 
         guard !samples.isEmpty else { appendLog("ERROR: Add at least one sample first"); return }
         guard !outDir.isEmpty else { appendLog("ERROR: Select an output directory first"); return }
+        guard !projName.isEmpty else { appendLog("ERROR: Set a project name"); return }
 
         let ordered = orderedPipeline()
         guard !ordered.isEmpty else { appendLog("ERROR: Add at least one module"); return }
 
         await ensureBackendStarted()
         appendLog("Running \(ordered.count) step(s) on \(samples.count) sample(s)…")
+        isRunning = true
+        progressPercent = 0
+        progressMessage = "Starting…"
+        defer {
+            isRunning = false
+        }
 
         struct RunParams: Codable {
             var outputDir: String
+            var projectName: String
             var samples: [SampleMetadata]
             var steps: [PipelineStep]
         }
@@ -129,7 +154,7 @@ final class AppModel: ObservableObject {
             let steps = ordered.map { PipelineStep(specId: $0.specId, params: $0.params) }
             let summary: PipelineRunSummary = try await rpc.call(
                 method: "run_pipeline",
-                params: RunParams(outputDir: outDir, samples: samples, steps: steps)
+                params: RunParams(outputDir: outDir, projectName: projName, samples: samples, steps: steps)
             )
             appendLog("OK: wrote outputs to \(summary.outputDir)")
             for r in summary.results {
@@ -138,6 +163,8 @@ final class AppModel: ObservableObject {
                     appendLog("  checkpoint: \(p)")
                 }
             }
+            progressPercent = 1
+            progressMessage = "Done."
         } catch {
             appendLog("run_pipeline ERROR: \(error)")
         }

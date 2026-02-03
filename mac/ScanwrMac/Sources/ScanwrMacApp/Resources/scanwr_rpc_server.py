@@ -21,6 +21,24 @@ def _notify_log(message: str) -> None:
     sys.stdout.flush()
 
 
+def _notify_progress(
+    percent: float,
+    message: str,
+    sample: str | None = None,
+    step_index: int | None = None,
+    step_count: int | None = None,
+) -> None:
+    params: Dict[str, Any] = {"percent": max(0.0, min(1.0, float(percent))), "message": message}
+    if sample is not None:
+        params["sample"] = sample
+    if step_index is not None:
+        params["stepIndex"] = step_index
+    if step_count is not None:
+        params["stepCount"] = step_count
+    sys.stdout.write(json.dumps({"method": "progress", "params": params}) + "\n")
+    sys.stdout.flush()
+
+
 def _is_10x_mtx_dir(path: Path) -> bool:
     required_any = {"matrix.mtx", "matrix.mtx.gz"}
     barcodes_any = {"barcodes.tsv", "barcodes.tsv.gz"}
@@ -234,14 +252,35 @@ def run_pipeline(input_path: str, output_dir: str, steps: List[Dict[str, Any]]) 
     }
 
 
-def run_pipeline_multi(output_dir: str, samples: List[Dict[str, Any]], steps: List[Dict[str, Any]]) -> Dict[str, Any]:
+def _params_sig(params: Dict[str, Any]) -> str:
+    import hashlib
+
+    blob = json.dumps(params, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def _step_sig(step: Dict[str, Any]) -> Dict[str, Any]:
+    spec_id = str(step.get("specId"))
+    params = step.get("params") or {}
+    return {"specId": spec_id, "paramsSha256": _params_sig(params)}
+
+
+def run_pipeline_multi(output_dir: str, project_name: str, samples: List[Dict[str, Any]], steps: List[Dict[str, Any]]) -> Dict[str, Any]:
     import scanpy as sc  # local import after env set
 
     out_dir = Path(output_dir).expanduser().resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    project = out_dir / _sanitize_filename(project_name)
+    project.mkdir(parents=True, exist_ok=True)
+    samples_root = project / "samples"
+    samples_root.mkdir(parents=True, exist_ok=True)
+
+    requested_sigs = [_step_sig(s) for s in steps]
+
     results: List[Dict[str, Any]] = []
-    for s in samples:
+    total_samples = max(1, len(samples))
+    for s_idx, s in enumerate(samples, start=1):
         sample = str(s.get("sample", "")).strip()
         group = str(s.get("group", "")).strip()
         path = str(s.get("path", "")).strip()
@@ -250,29 +289,91 @@ def run_pipeline_multi(output_dir: str, samples: List[Dict[str, Any]], steps: Li
         if not sample or not group or not path:
             raise ValueError("Each sample must include sample, group, path")
 
-        sample_out = out_dir / _sanitize_filename(sample)
+        sample_out = samples_root / _sanitize_filename(sample)
         sample_out.mkdir(parents=True, exist_ok=True)
 
-        _notify_log(f"Reading {sample}…")
-        reader, adata = _read_with_reader(reader_override, path)
+        checkpoint_dir = sample_out / "checkpoint"
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        checkpoint_h5ad = checkpoint_dir / "checkpoint.h5ad"
+        checkpoint_steps = checkpoint_dir / "steps.json"
+
+        def _load_cached_prefix() -> List[Dict[str, Any]]:
+            if not checkpoint_steps.exists():
+                return []
+            try:
+                return json.loads(checkpoint_steps.read_text())
+            except Exception:
+                return []
+
+        def _write_cached_prefix(prefix: List[Dict[str, Any]]) -> None:
+            checkpoint_steps.write_text(json.dumps(prefix, indent=2, sort_keys=True))
+
+        cached_sigs = _load_cached_prefix()
+        prefix_len = 0
+        for a, b in zip(cached_sigs, requested_sigs):
+            if a == b:
+                prefix_len += 1
+            else:
+                break
+
+        if prefix_len > 0 and checkpoint_h5ad.exists():
+            _notify_log(f"[{sample}] Cache hit: skipping {prefix_len}/{len(requested_sigs)} step(s)")
+            _notify_progress(
+                percent=(s_idx - 1) / total_samples,
+                message=f"{sample}: resuming from checkpoint",
+                sample=sample,
+                step_index=prefix_len,
+                step_count=len(requested_sigs),
+            )
+            adata = sc.read_h5ad(str(checkpoint_h5ad))
+            reader = reader_override or "auto"
+        else:
+            _notify_log(f"Reading {sample}…")
+            _notify_progress(
+                percent=(s_idx - 1) / total_samples,
+                message=f"{sample}: reading input",
+                sample=sample,
+                step_index=0,
+                step_count=len(requested_sigs),
+            )
+            reader, adata = _read_with_reader(reader_override, path)
+            # Reset cache if it doesn't match
+            _write_cached_prefix([])
 
         checkpoints: List[str] = []
         for i, step in enumerate(steps, start=1):
+            if i <= prefix_len:
+                continue
             spec_id = str(step.get("specId"))
             params = step.get("params") or {}
+
+            overall = ((s_idx - 1) + (i / max(1, len(steps)))) / total_samples
+            _notify_progress(
+                percent=overall,
+                message=f"{sample}: {spec_id}",
+                sample=sample,
+                step_index=i,
+                step_count=len(steps),
+            )
             _notify_log(f"[{sample}] Step {i}/{len(steps)}: {spec_id}")
             _run_module(adata, spec_id, params)
 
-            ck_name = f"{i:02d}_{_sanitize_filename(spec_id)}.h5ad"
-            ck_path = sample_out / ck_name
-            _notify_log(f"[{sample}] Saving checkpoint: {ck_path.name}")
-            adata.write_h5ad(str(ck_path))
-            checkpoints.append(str(ck_path))
-            adata = sc.read_h5ad(str(ck_path))
+            _notify_log(f"[{sample}] Updating checkpoint.h5ad")
+            adata.write_h5ad(str(checkpoint_h5ad))
+            # Update cached signature list in order.
+            done = requested_sigs[:i]
+            _write_cached_prefix(done)
+            checkpoints.append(str(checkpoint_h5ad))
+            adata = sc.read_h5ad(str(checkpoint_h5ad))
 
-        final_path = sample_out / "final.h5ad"
-        _notify_log(f"[{sample}] Saving final: {final_path.name}")
-        adata.write_h5ad(str(final_path))
+        final_path = checkpoint_h5ad
+        _notify_progress(
+            percent=min(1.0, s_idx / total_samples),
+            message=f"{sample}: done",
+            sample=sample,
+            step_index=len(steps),
+            step_count=len(steps),
+        )
 
         shape = list(getattr(adata, "shape", (0, 0)))
         results.append(
@@ -288,7 +389,7 @@ def run_pipeline_multi(output_dir: str, samples: List[Dict[str, Any]], steps: Li
             }
         )
 
-    return {"outputDir": str(out_dir), "results": results}
+    return {"outputDir": str(project), "results": results}
 
 
 def _handle(method: str, params: Any) -> Any:
@@ -303,6 +404,7 @@ def _handle(method: str, params: Any) -> Any:
         if "samples" in params:
             return run_pipeline_multi(
                 output_dir=params["outputDir"],
+                project_name=params.get("projectName") or "scanwr-project",
                 samples=params["samples"],
                 steps=params["steps"],
             )

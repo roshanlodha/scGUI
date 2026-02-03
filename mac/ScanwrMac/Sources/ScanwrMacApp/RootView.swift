@@ -36,42 +36,68 @@ struct RootView: View {
 }
 
 private struct TopBar: View {
+    @EnvironmentObject private var model: AppModel
+
     var onData: () -> Void
     var onAddModule: () -> Void
     var onSettings: () -> Void
     var onRun: () -> Void
 
     var body: some View {
-        HStack(spacing: 10) {
-            Button {
-                onData()
-            } label: {
-                Label("Data", systemImage: "tray.and.arrow.down")
+        VStack(spacing: 8) {
+            HStack(spacing: 10) {
+                Button {
+                    onData()
+                } label: {
+                    Label("Data", systemImage: "tray.and.arrow.down")
+                }
+                .disabled(model.isRunning)
+
+                Button {
+                    onAddModule()
+                } label: {
+                    Label("Add Module", systemImage: "plus.circle")
+                }
+                .disabled(model.isRunning)
+
+                Spacer()
+
+                Button {
+                    onSettings()
+                } label: {
+                    Image(systemName: "info.circle")
+                        .imageScale(.large)
+                }
+                .help("Settings")
+                .disabled(model.isRunning)
+
+                Button {
+                    onRun()
+                } label: {
+                    Image(systemName: "play.circle.fill")
+                        .imageScale(.large)
+                }
+                .help("Run pipeline")
+                .disabled(
+                    model.isRunning
+                    || model.outputDirectory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    || model.projectName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    || model.samples.isEmpty
+                    || model.nodes.isEmpty
+                )
             }
 
-            Button {
-                onAddModule()
-            } label: {
-                Label("Add Module", systemImage: "plus.circle")
+            if model.isRunning {
+                HStack(spacing: 10) {
+                    ProgressView(value: model.progressPercent)
+                        .frame(maxWidth: .infinity)
+                    Text(model.progressMessage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .frame(width: 260, alignment: .leading)
+                }
             }
-
-            Spacer()
-
-            Button {
-                onSettings()
-            } label: {
-                Image(systemName: "info.circle")
-                    .imageScale(.large)
-            }
-            .help("Settings")
-
-            Button {
-                onRun()
-            } label: {
-                Image(systemName: "play.circle.fill")
-                    .imageScale(.large)
-            }
-            .help("Run pipeline")
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)

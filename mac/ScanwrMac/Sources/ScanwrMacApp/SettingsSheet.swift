@@ -10,12 +10,23 @@ struct SettingsSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Settings").font(.title3).bold()
-            Text("Choose where to save per-step checkpoints and the final output files.")
+            Text("Choose a project directory and name. Outputs are written under `Project/samples/<sample>/checkpoint/`.")
                 .foregroundStyle(.secondary)
 
             HStack(spacing: 10) {
-                TextField("Output directory", text: $model.outputDirectory)
+                TextField("Project name", text: $model.projectName)
+                    .frame(width: 240)
+            }
+
+            HStack(spacing: 10) {
+                TextField("Project directory", text: $model.outputDirectory)
                 Button("Browse…") { showingDirPicker = true }
+            }
+
+            if model.outputDirectory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Text("Project directory is required.")
+                    .font(.caption)
+                    .foregroundStyle(.red)
             }
 
             Spacer()
@@ -27,7 +38,7 @@ struct SettingsSheet: View {
             }
         }
         .padding(16)
-        .frame(width: 640, height: 220)
+        .frame(width: 640, height: 260)
         .fileImporter(
             isPresented: $showingDirPicker,
             allowedContentTypes: [.folder],
@@ -39,4 +50,3 @@ struct SettingsSheet: View {
         }
     }
 }
-

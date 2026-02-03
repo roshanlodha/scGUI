@@ -61,12 +61,25 @@ final class PythonRPCClient {
     private let pending = PendingCalls()
     private let writeQueue = DispatchQueue(label: "scanwr.rpc.write", qos: .userInitiated)
     private var onLog: (@Sendable (String) async -> Void)?
+    private var onProgress: (@Sendable (ProgressEvent) async -> Void)?
 
     var isRunning: Bool { process?.isRunning == true }
 
-    func start(onLog: @escaping @Sendable (String) async -> Void) async throws {
+    struct ProgressEvent: Codable, Hashable {
+        var percent: Double
+        var message: String
+        var sample: String?
+        var stepIndex: Int?
+        var stepCount: Int?
+    }
+
+    func start(
+        onLog: @escaping @Sendable (String) async -> Void,
+        onProgress: @escaping @Sendable (ProgressEvent) async -> Void
+    ) async throws {
         if isRunning { return }
         self.onLog = onLog
+        self.onProgress = onProgress
 
         guard let python = Self.resolvePythonExecutable() else {
             throw RPCError.launchFailed("Set SCANWR_PYTHON to a Python with scanpy installed.")
@@ -170,6 +183,22 @@ final class PythonRPCClient {
                 let msg = ((obj["params"] as? [String: Any])?["message"] as? String) ?? ""
                 await onLog?(msg)
             }
+            if method == "progress" {
+                if let params = obj["params"] as? [String: Any] {
+                    let percent = (params["percent"] as? Double) ?? 0
+                    let message = (params["message"] as? String) ?? ""
+                    let sample = params["sample"] as? String
+                    let stepIndex = params["stepIndex"] as? Int
+                    let stepCount = params["stepCount"] as? Int
+                    await onProgress?(ProgressEvent(
+                        percent: percent,
+                        message: message,
+                        sample: sample,
+                        stepIndex: stepIndex,
+                        stepCount: stepCount
+                    ))
+                }
+            }
             return
         }
 
@@ -241,4 +270,3 @@ private struct AnyEncodable: Encodable {
     }
     func encode(to encoder: Encoder) throws { try encodeFn(encoder) }
 }
-
