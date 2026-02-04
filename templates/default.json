@@ -1,0 +1,148 @@
+{
+  "id" : "132065C3-486A-46C2-99EC-1077E9406F5A",
+  "links" : [
+    {
+      "fromNodeId" : "6706A02B-F3FE-471D-A243-3CB49479C543",
+      "id" : "833B482E-7993-45CA-A1B6-A44FE698B3EA",
+      "toNodeId" : "031EDEE9-25DB-4D06-82E7-0B804B7A055B"
+    },
+    {
+      "fromNodeId" : "031EDEE9-25DB-4D06-82E7-0B804B7A055B",
+      "id" : "3CB083B8-7C7E-45B4-883F-E71C7EF77B45",
+      "toNodeId" : "40E9F14F-E294-4F13-B346-5B1AA181965A"
+    },
+    {
+      "fromNodeId" : "40E9F14F-E294-4F13-B346-5B1AA181965A",
+      "id" : "53FE95CF-FC40-441B-836F-FC00E9479E1F",
+      "toNodeId" : "F8E9B582-5B08-496B-B4CD-12741F3D5330"
+    },
+    {
+      "fromNodeId" : "F8E9B582-5B08-496B-B4CD-12741F3D5330",
+      "id" : "625737AE-3D94-4FD2-B047-BCE5A0EF1EB3",
+      "toNodeId" : "5943A185-C6AE-4994-90C9-EA6A8F220F91"
+    },
+    {
+      "fromNodeId" : "5943A185-C6AE-4994-90C9-EA6A8F220F91",
+      "id" : "137A43E4-F527-4C0C-BD67-005ED359A82D",
+      "toNodeId" : "68B25649-BFDD-4995-95F3-193B123C70EF"
+    },
+    {
+      "fromNodeId" : "68B25649-BFDD-4995-95F3-193B123C70EF",
+      "id" : "4E2C8EC4-D375-46B1-AD53-D26397C14155",
+      "toNodeId" : "F8478827-0F96-4AAA-811F-263E0549A3F1"
+    },
+    {
+      "fromNodeId" : "F8478827-0F96-4AAA-811F-263E0549A3F1",
+      "id" : "F5009371-4A19-4243-AF8D-98C7E510E730",
+      "toNodeId" : "039F73D1-EB56-4F47-9D54-59BF81E6BEB2"
+    },
+    {
+      "fromNodeId" : "039F73D1-EB56-4F47-9D54-59BF81E6BEB2",
+      "id" : "6AA439D6-4596-43D5-99B9-02EB6AF341A0",
+      "toNodeId" : "24C57864-D590-46B2-82B2-148E2F483CCB"
+    },
+    {
+      "fromNodeId" : "24C57864-D590-46B2-82B2-148E2F483CCB",
+      "id" : "2D66B4DF-C623-4980-BBCC-11B5A9ADD007",
+      "toNodeId" : "8A05622B-AAAC-4050-AB4C-379F6DDD4F3E"
+    }
+  ],
+  "name" : "Template",
+  "nodes" : [
+    {
+      "id" : "6706A02B-F3FE-471D-A243-3CB49479C543",
+      "params" : {
+        "log1p" : true,
+        "percent_top" : "",
+        "use_hb" : true,
+        "use_mt" : true,
+        "use_ribo" : true
+      },
+      "specId" : "scanpy.pp.calculate_qc_metrics",
+      "x" : 220,
+      "y" : 167
+    },
+    {
+      "id" : "031EDEE9-25DB-4D06-82E7-0B804B7A055B",
+      "params" : {
+        "min_genes" : 100
+      },
+      "specId" : "scanpy.pp.filter_cells",
+      "x" : 580,
+      "y" : 167
+    },
+    {
+      "id" : "40E9F14F-E294-4F13-B346-5B1AA181965A",
+      "params" : {
+        "min_cells" : 3
+      },
+      "specId" : "scanpy.pp.filter_genes",
+      "x" : 958,
+      "y" : 167
+    },
+    {
+      "id" : "F8E9B582-5B08-496B-B4CD-12741F3D5330",
+      "params" : {
+        "target_sum" : ""
+      },
+      "specId" : "scanpy.pp.normalize_total",
+      "x" : 1696,
+      "y" : 167
+    },
+    {
+      "id" : "5943A185-C6AE-4994-90C9-EA6A8F220F91",
+      "params" : {
+
+      },
+      "specId" : "scanpy.pp.log1p",
+      "x" : 2056,
+      "y" : 167
+    },
+    {
+      "id" : "68B25649-BFDD-4995-95F3-193B123C70EF",
+      "params" : {
+        "batch_key" : "",
+        "n_top_genes" : 2000
+      },
+      "specId" : "scanpy.pp.highly_variable_genes",
+      "x" : 2434,
+      "y" : 167
+    },
+    {
+      "id" : "F8478827-0F96-4AAA-811F-263E0549A3F1",
+      "params" : {
+
+      },
+      "specId" : "scanpy.tl.pca",
+      "x" : 2794,
+      "y" : 167
+    },
+    {
+      "id" : "039F73D1-EB56-4F47-9D54-59BF81E6BEB2",
+      "params" : {
+
+      },
+      "specId" : "scanpy.pp.neighbors",
+      "x" : 3172,
+      "y" : 167
+    },
+    {
+      "id" : "24C57864-D590-46B2-82B2-148E2F483CCB",
+      "params" : {
+
+      },
+      "specId" : "scanpy.tl.umap",
+      "x" : 3532,
+      "y" : 167
+    },
+    {
+      "id" : "8A05622B-AAAC-4050-AB4C-379F6DDD4F3E",
+      "params" : {
+        "res" : "0.5"
+      },
+      "specId" : "scanpy.tl.leiden",
+      "x" : 3892,
+      "y" : 167
+    }
+  ]
+}
