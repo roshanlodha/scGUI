@@ -25,13 +25,13 @@ Each scGUI “project” is just a folder on disk. The app stores state in a sin
 ## Repo layout
 
 - `mac/ScanwrMac/`: the macOS SwiftUI app + bundled Python RPC server.
-- `src/scanwr/`: an older Python/Tk prototype (separate from the SwiftUI app).
+- `mac/ScanwrMac/Sources/ScanwrMacApp/Resources/scanwr_rpc_server.py`: the backend’s module registry + execution.
 - `requirements-lock.txt`: pinned Python deps for the backend/runtime.
 
 ## Release packaging
 
-- Current version: `0.1.2`
-- Build outputs: `mac/ScanwrMac/dist/scGUI.app` and `mac/ScanwrMac/dist/scGUI-0.1.2.dmg`
+- Current version: `0.1.3`
+- Build outputs: `mac/ScanwrMac/dist/scGUI.app` and `mac/ScanwrMac/dist/scGUI-0.1.3.dmg`
 
 ## Development & contributing
 

@@ -36,8 +36,12 @@ struct NodeInspector: View {
                 FilterGenesInspector(params: $node.params)
             } else if node.specId == "scanpy.pp.scrublet" {
                 ScrubletInspector(params: $node.params)
+            } else if node.specId == "scanpy.pp.highly_variable_genes" {
+                HighlyVariableGenesInspector(params: $node.params)
             } else if node.specId == "scanpy.pp.normalize_total" {
                 NormalizeTotalInspector(params: $node.params)
+            } else if node.specId == "scanpy.tl.leiden" {
+                LeidenInspector(params: $node.params)
             } else {
                 GenericParamsInspector(params: $node.params)
             }
@@ -247,6 +251,61 @@ private struct NormalizeTotalInspector: View {
     private func bindingString(_ key: String) -> Binding<String> {
         Binding<String>(
             get: { params[key]?.stringValue ?? "" },
+            set: { params[key] = .string($0) }
+        )
+    }
+}
+
+private struct HighlyVariableGenesInspector: View {
+    @Binding var params: [String: JSONValue]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Parameters").font(.subheadline).bold()
+            Text("Leave values blank to use Scanpy’s defaults.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            LabeledContent("n_top_genes") {
+                TextField("", text: bindingString("n_top_genes"))
+                    .frame(width: 220)
+            }
+
+            LabeledContent("batch_key") {
+                TextField("", text: bindingString("batch_key"))
+                    .frame(width: 220)
+            }
+        }
+    }
+
+    private func bindingString(_ key: String) -> Binding<String> {
+        Binding<String>(
+            get: { params[key]?.stringValue ?? (params[key]?.doubleValue.map { String(Int($0)) } ?? "") },
+            set: { params[key] = .string($0) }
+        )
+    }
+}
+
+private struct LeidenInspector: View {
+    @Binding var params: [String: JSONValue]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Parameters").font(.subheadline).bold()
+            Text("Resolution parameter for Leiden clustering.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            LabeledContent("res") {
+                TextField("", text: bindingString("res"))
+                    .frame(width: 220)
+            }
+        }
+    }
+
+    private func bindingString(_ key: String) -> Binding<String> {
+        Binding<String>(
+            get: { params[key]?.stringValue ?? (params[key]?.doubleValue.map { String($0) } ?? "") },
             set: { params[key] = .string($0) }
         )
     }

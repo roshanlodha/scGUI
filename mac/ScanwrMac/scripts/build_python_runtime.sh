@@ -50,8 +50,15 @@ SCANWR_VENV_PYTHON="${SCANWR_VENV_PYTHON:-$DEFAULT_VENV_PY}"
 #   export SCANWR_PY_PACKAGES="scanpy squidpy"
 SCANWR_PY_PACKAGES="${SCANWR_PY_PACKAGES:-scanpy squidpy}"
 
+# Extra packages to ensure are present in the embedded runtime regardless of mode.
+# Leiden clustering in Scanpy requires `leidenalg` (and its igraph bindings).
+SCANWR_PY_EXTRA_PACKAGES="${SCANWR_PY_EXTRA_PACKAGES:-leidenalg igraph}"
+
 mkdir -p "$ROOT/dist"
-rm -rf "$OUT"
+if [[ -d "$OUT" ]]; then
+  chmod -R u+rwX "$OUT" >/dev/null 2>&1 || true
+  rm -rf "$OUT" >/dev/null 2>&1 || true
+fi
 mkdir -p "$OUT"
 
 _need() {
@@ -163,6 +170,20 @@ else
   echo "ERROR: Unknown SCANWR_PY_MODE: $SCANWR_PY_MODE (use 'venv' or 'requirements')" >&2
   exit 2
 fi
+
+echo "Ensuring extra packages are installed (for bundled modules)…"
+"$PY" -m ensurepip --upgrade >/dev/null 2>&1 || true
+"$PY" -m pip install --upgrade pip setuptools wheel >/dev/null
+
+echo "Checking for required optional deps (leidenalg/igraph)…"
+if ! "$PY" -c "import leidenalg, igraph" >/dev/null 2>&1; then
+  echo "Missing leiden optional deps; installing: $SCANWR_PY_EXTRA_PACKAGES"
+  # shellcheck disable=SC2086
+  "$PY" -m pip install $SCANWR_PY_EXTRA_PACKAGES
+fi
+
+echo "Final import verification…"
+"$PY" -c "import scanpy as sc, squidpy as sq, leidenalg, igraph; print('scanpy', getattr(sc,'__version__','?')); print('squidpy', getattr(sq,'__version__','?')); print('leidenalg', getattr(leidenalg,'__version__','?')); print('igraph', getattr(igraph,'__version__','?'))"
 
 echo "OK: Built embedded runtime at: $OUT/python"
 echo "Next:"

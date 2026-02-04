@@ -350,6 +350,11 @@ final class AppModel: ObservableObject {
             return ["min_cells": .number(3)]
         case "scanpy.pp.scrublet":
             return ["batch_key": .string("sample")]
+        case "scanpy.pp.highly_variable_genes":
+            return [
+                "n_top_genes": .number(2000),
+                "batch_key": .string(""),
+            ]
         case "scanpy.pp.calculate_qc_metrics":
             return [
                 "use_mt": .bool(true),
@@ -360,6 +365,8 @@ final class AppModel: ObservableObject {
             ]
         case "scanpy.pp.normalize_total":
             return ["target_sum": .string("")]
+        case "scanpy.tl.leiden":
+            return ["res": .number(1.0)]
         default:
             return [:]
         }

@@ -12,6 +12,7 @@ set -euo pipefail
 #   ./rebuild_app.sh
 #   ./rebuild_app.sh --open
 #   ./rebuild_app.sh --no-dmg
+#   ./rebuild_app.sh --reuse-runtime
 #
 # Notes:
 # - For offline-friendly builds, this repo prefers SCANWR_PY_MODE=venv (copy from ./venv).
@@ -21,10 +22,12 @@ set -euo pipefail
 
 OPEN_APP="0"
 CREATE_DMG="1"
+REUSE_RUNTIME="0"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --open) OPEN_APP="1"; shift ;;
     --no-dmg) CREATE_DMG="0"; shift ;;
+    --reuse-runtime) REUSE_RUNTIME="1"; shift ;;
     -h|--help)
       sed -n '1,80p' "$0"
       exit 0
@@ -46,8 +49,10 @@ echo "==> Clearing app cache…"
 rm -rf "$HOME/Library/Caches/scGUI" 2>/dev/null || true
 rm -rf "/tmp/scgui-cache" 2>/dev/null || true
 
-if [[ ! -x "$RUNTIME_DIR/bin/python3" ]]; then
-  echo "==> Embedded Python runtime missing; building it…"
+if [[ "$REUSE_RUNTIME" == "1" && -x "$RUNTIME_DIR/bin/python3" ]]; then
+  echo "==> Reusing existing embedded Python runtime…"
+else
+  echo "==> (Re)building embedded Python runtime…"
   export SCANWR_PY_MODE="${SCANWR_PY_MODE:-venv}"
   "$MAC_ROOT/scripts/build_python_runtime.sh"
 fi

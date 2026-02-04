@@ -760,6 +760,17 @@ def _run_module(adata, spec_id: str, params: Dict[str, Any]) -> None:
         sc.pp.scrublet(adata, batch_key=batch_key)
         return
 
+    if spec_id == "scanpy.pp.highly_variable_genes":
+        n_top_genes = _opt_int("n_top_genes")
+        batch_key = _opt_str("batch_key")
+        kwargs: Dict[str, Any] = {"adata": adata}
+        if n_top_genes is not None:
+            kwargs["n_top_genes"] = n_top_genes
+        if batch_key is not None:
+            kwargs["batch_key"] = batch_key
+        sc.pp.highly_variable_genes(**kwargs)
+        return
+
     if spec_id == "scanpy.pp.calculate_qc_metrics":
         # Prefer the simplified, checkbox-driven interface (mt/ribo/hb). Fall back to
         # advanced parameters if those aren't provided.
@@ -818,6 +829,39 @@ def _run_module(adata, spec_id: str, params: Dict[str, Any]) -> None:
         sc.pp.log1p(adata)
         return
 
+    if spec_id == "scanpy.tl.pca":
+        sc.tl.pca(adata)
+        return
+
+    if spec_id == "scanpy.pp.neighbors":
+        sc.pp.neighbors(adata)
+        return
+
+    if spec_id == "scanpy.tl.umap":
+        sc.tl.umap(adata)
+        return
+
+    if spec_id == "scanpy.tl.leiden":
+        try:
+            import leidenalg  # noqa: F401
+            import igraph  # noqa: F401
+        except Exception as e:
+            raise RuntimeError(
+                "Leiden clustering requires the optional deps `leidenalg` + `igraph`, "
+                "but they are missing from the app's embedded Python runtime. "
+                "Rebuild the embedded runtime (mac/ScanwrMac/scripts/build_python_runtime.sh) "
+                "and repackage the .app."
+            ) from e
+        # UI uses "res"; allow "resolution" too for advanced usage.
+        res = _opt_float("res")
+        if res is None:
+            res = _opt_float("resolution")
+        if res is None:
+            sc.tl.leiden(adata)
+        else:
+            sc.tl.leiden(adata, resolution=res)
+        return
+
     raise NotImplementedError(spec_id)
 
 
@@ -852,6 +896,13 @@ def list_modules() -> List[Dict[str, Any]]:
             "scanpyQualname": "scanpy.pp.scrublet",
         },
         {
+            "id": "scanpy.pp.highly_variable_genes",
+            "group": "pp",
+            "namespace": "core",
+            "title": "Highly Variable Genes",
+            "scanpyQualname": "scanpy.pp.highly_variable_genes",
+        },
+        {
             "id": "scanpy.pp.normalize_total",
             "group": "pp",
             "namespace": "core",
@@ -864,6 +915,34 @@ def list_modules() -> List[Dict[str, Any]]:
             "namespace": "core",
             "title": "Log1p",
             "scanpyQualname": "scanpy.pp.log1p",
+        },
+        {
+            "id": "scanpy.tl.pca",
+            "group": "tl",
+            "namespace": "core",
+            "title": "PCA",
+            "scanpyQualname": "scanpy.tl.pca",
+        },
+        {
+            "id": "scanpy.pp.neighbors",
+            "group": "pp",
+            "namespace": "core",
+            "title": "Neighbors",
+            "scanpyQualname": "scanpy.pp.neighbors",
+        },
+        {
+            "id": "scanpy.tl.umap",
+            "group": "tl",
+            "namespace": "core",
+            "title": "UMAP",
+            "scanpyQualname": "scanpy.tl.umap",
+        },
+        {
+            "id": "scanpy.tl.leiden",
+            "group": "tl",
+            "namespace": "core",
+            "title": "Leiden",
+            "scanpyQualname": "scanpy.tl.leiden",
         },
     ]
 
