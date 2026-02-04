@@ -4,17 +4,26 @@ import SwiftUI
 @MainActor
 final class AppModel: ObservableObject {
     @Published var availableModules: [ModuleSpec] = []
+    @Published var isLoadingModules: Bool = false
+    @Published var moduleLoadError: String? = nil
 
     // Pipeline canvas state
-    @Published var nodes: [PipelineNode] = []
-    @Published var links: [PipelineLink] = []
+    @Published var nodes: [PipelineNode] = [] {
+        didSet { schedulePersistCurrentWorkflow() }
+    }
+    @Published var links: [PipelineLink] = [] {
+        didSet { schedulePersistCurrentWorkflow() }
+    }
     @Published var selectedNodeId: UUID?
 
-    // Data + settings
+    // Project + metadata
     @Published var samples: [SampleMetadata] = []
     @Published var outputDirectory: String = ""
-    @Published var projectName: String = "scanwr-project"
+    @Published var projectName: String = "scGUI-project"
     @Published var recentProjects: [String] = []
+
+    // Templates
+    @Published var availableTemplates: [WorkflowTemplate] = []
 
     // Logs
     @Published var logs: [String] = []
@@ -25,6 +34,11 @@ final class AppModel: ObservableObject {
     @Published var progressMessage: String = ""
 
     private let rpc = PythonRPCClient()
+    private var workflowSaveWorkItem: DispatchWorkItem?
+
+    init() {
+        Task { await loadModules() }
+    }
 
     var hasProject: Bool {
         !outputDirectory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -38,97 +52,18 @@ final class AppModel: ObservableObject {
         return URL(fileURLWithPath: base).appendingPathComponent(name)
     }
 
-    func loadRecents() {
-        recentProjects = UserDefaults.standard.array(forKey: "scanwr.recentProjects") as? [String] ?? []
-    }
-
-    func addRecent(_ path: String) {
-        var items = recentProjects
-        items.removeAll(where: { $0 == path })
-        items.insert(path, at: 0)
-        recentProjects = Array(items.prefix(12))
-        UserDefaults.standard.set(recentProjects, forKey: "scanwr.recentProjects")
-    }
-
-    func removeRecent(_ path: String) {
-        recentProjects.removeAll(where: { $0 == path })
-        UserDefaults.standard.set(recentProjects, forKey: "scanwr.recentProjects")
-    }
-
-    func openProject(at url: URL) {
-        let fm = FileManager.default
-        var projectURL = url
-        if url.lastPathComponent == ".scanwr" {
-            projectURL = url.deletingLastPathComponent()
-        } else if fm.fileExists(atPath: url.appendingPathComponent(".scanwr").path) {
-            projectURL = url
-        } else {
-            appendLog("ERROR: Selected folder is not a scanwr project (missing .scanwr/).")
-            return
-        }
-
-        outputDirectory = projectURL.deletingLastPathComponent().path
-        projectName = projectURL.lastPathComponent
-        addRecent(projectURL.path)
-
-        // Load metadata.txt if present
-        let metaURL = projectURL.appendingPathComponent(".scanwr/metadata.txt")
-        if let text = try? String(contentsOf: metaURL) {
-            samples = Self.parseMetadata(text)
-            appendLog("Loaded project: \(projectURL.path)")
-        } else {
-            samples = []
-            appendLog("Opened project (no metadata): \(projectURL.path)")
-        }
-    }
-
-    func createProject(baseDir: URL, name: String) {
-        let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !clean.isEmpty else { return }
-
-        let projectURL = baseDir.appendingPathComponent(clean)
-        let scanwrURL = projectURL.appendingPathComponent(".scanwr")
-        let checkpointsURL = scanwrURL.appendingPathComponent("checkpoints")
-        let historyURL = scanwrURL.appendingPathComponent("history")
-
-        do {
-            try FileManager.default.createDirectory(at: checkpointsURL, withIntermediateDirectories: true)
-            try FileManager.default.createDirectory(at: historyURL, withIntermediateDirectories: true)
-            let metaURL = scanwrURL.appendingPathComponent("metadata.txt")
-            if !FileManager.default.fileExists(atPath: metaURL.path) {
-                try "sample\tgroup\tpath\treader\n".write(to: metaURL, atomically: true, encoding: .utf8)
-            }
-            outputDirectory = baseDir.path
-            projectName = clean
-            samples = []
-            addRecent(projectURL.path)
-            appendLog("Created project: \(projectURL.path)")
-        } catch {
-            appendLog("ERROR: Create project failed: \(error)")
-        }
-    }
-
-    private static func parseMetadata(_ text: String) -> [SampleMetadata] {
-        var out: [SampleMetadata] = []
-        let lines = text.split(whereSeparator: \.isNewline)
-        guard !lines.isEmpty else { return [] }
-        for (idx, raw) in lines.enumerated() {
-            if idx == 0 { continue } // header
-            let parts = raw.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
-            if parts.count < 3 { continue }
-            let sample = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
-            let group = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
-            let path = parts[2].trimmingCharacters(in: .whitespacesAndNewlines)
-            let reader = (parts.count >= 4 ? parts[3] : "").trimmingCharacters(in: .whitespacesAndNewlines)
-            if sample.isEmpty || group.isEmpty || path.isEmpty { continue }
-            out.append(SampleMetadata(sample: sample, group: group, path: path, reader: reader))
-        }
-        return out
-    }
+    // MARK: Logging / progress
 
     func appendLog(_ line: String) {
         logs.append(line)
     }
+
+    func setProgress(_ ev: PythonRPCClient.ProgressEvent) {
+        progressPercent = max(0, min(1, ev.percent))
+        progressMessage = ev.message
+    }
+
+    // MARK: Backend
 
     func ensureBackendStarted() async {
         if rpc.isRunning { return }
@@ -147,18 +82,59 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func setProgress(_ ev: PythonRPCClient.ProgressEvent) {
-        progressPercent = max(0, min(1, ev.percent))
-        progressMessage = ev.message
-    }
-
     func loadModules() async {
+        if isLoadingModules { return }
+        isLoadingModules = true
+        moduleLoadError = nil
         await ensureBackendStarted()
         do {
             let specs: [ModuleSpec] = try await rpc.call(method: "list_modules", params: [:])
             availableModules = specs
+            appendLog("Modules: loaded \(specs.count)")
         } catch {
-            appendLog("list_modules ERROR: \(error)")
+            let msg = "list_modules ERROR: \(error)"
+            moduleLoadError = msg
+            appendLog(msg)
+        }
+        isLoadingModules = false
+    }
+
+    // MARK: Cache
+
+    func clearAppCache() async {
+        appendLog("Clearing app cache…")
+        await rpc.stop()
+
+        for dir in Self.appCacheDirsToClear() {
+            do {
+                if FileManager.default.fileExists(atPath: dir.path) {
+                    try FileManager.default.removeItem(at: dir)
+                }
+                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                appendLog("Cleared: \(dir.path)")
+            } catch {
+                appendLog("ERROR: clear cache failed (\(dir.path)): \(error)")
+            }
+        }
+
+        await loadModules()
+    }
+
+    private static func appCacheDirsToClear() -> [URL] {
+        var dirs: [URL] = []
+
+        if let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first {
+            dirs.append(base.appendingPathComponent("scGUI", isDirectory: true))
+        }
+        dirs.append(FileManager.default.temporaryDirectory.appendingPathComponent("scgui-cache", isDirectory: true))
+
+        // Clear dupes while preserving order.
+        var seen: Set<String> = []
+        return dirs.filter { url in
+            let key = url.standardizedFileURL.path
+            if seen.contains(key) { return false }
+            seen.insert(key)
+            return true
         }
     }
 
@@ -166,13 +142,133 @@ final class AppModel: ObservableObject {
         await ensureBackendStarted()
         struct Params: Codable { var path: String }
         do {
-            let res: ReaderSuggestion = try await rpc.call(method: "detect_reader", params: Params(path: path))
-            return res
+            return try await rpc.call(method: "detect_reader", params: Params(path: path))
         } catch {
             appendLog("detect_reader ERROR: \(error)")
             return nil
         }
     }
+
+    // MARK: Project open/create/close + recents
+
+    func loadRecents() {
+        recentProjects = UserDefaults.standard.array(forKey: "scgui.recentProjects") as? [String] ?? []
+    }
+
+    func addRecent(_ path: String) {
+        var items = recentProjects
+        items.removeAll(where: { $0 == path })
+        items.insert(path, at: 0)
+        recentProjects = Array(items.prefix(12))
+        UserDefaults.standard.set(recentProjects, forKey: "scgui.recentProjects")
+    }
+
+    func removeRecent(_ path: String) {
+        recentProjects.removeAll(where: { $0 == path })
+        UserDefaults.standard.set(recentProjects, forKey: "scgui.recentProjects")
+    }
+
+    func openProject(at url: URL) {
+        let fm = FileManager.default
+        var projectURL = url
+        if url.lastPathComponent == ".scanwr" {
+            projectURL = url.deletingLastPathComponent()
+        } else if fm.fileExists(atPath: url.appendingPathComponent(".scanwr").path) {
+            projectURL = url
+        } else {
+            appendLog("ERROR: Selected folder is not a scGUI project (missing .scanwr/).")
+            return
+        }
+
+        outputDirectory = projectURL.deletingLastPathComponent().path
+        projectName = projectURL.lastPathComponent
+        addRecent(projectURL.path)
+
+        loadTemplatesForCurrentProject()
+        loadOrInitCurrentWorkflow()
+
+        let metaURL = projectURL.appendingPathComponent(".scanwr/metadata.txt")
+        if let text = try? String(contentsOf: metaURL) {
+            samples = Self.parseMetadata(text)
+            appendLog("Loaded project: \(projectURL.path)")
+        } else {
+            samples = []
+            appendLog("Opened project (no metadata): \(projectURL.path)")
+        }
+    }
+
+    func createProject(baseDir: URL, name: String) {
+        let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return }
+
+        let projectURL = baseDir.appendingPathComponent(clean)
+        let scanwrURL = projectURL.appendingPathComponent(".scanwr")
+        let checkpointsURL = scanwrURL.appendingPathComponent("checkpoints")
+        let historyURL = scanwrURL.appendingPathComponent("history")
+        let templatesURL = scanwrURL.appendingPathComponent("templates")
+
+        do {
+            try FileManager.default.createDirectory(at: checkpointsURL, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: historyURL, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: templatesURL, withIntermediateDirectories: true)
+
+            let metaURL = scanwrURL.appendingPathComponent("metadata.txt")
+            if !FileManager.default.fileExists(atPath: metaURL.path) {
+                try "sample\tgroup\tpath\treader\n".write(to: metaURL, atomically: true, encoding: .utf8)
+            }
+
+            let currentTemplateURL = scanwrURL.appendingPathComponent("template.json")
+            if !FileManager.default.fileExists(atPath: currentTemplateURL.path) {
+                try Self.emptyCurrentWorkflow().write(to: currentTemplateURL, atomically: true, encoding: .utf8)
+            }
+
+            outputDirectory = baseDir.path
+            projectName = clean
+            samples = []
+            nodes = []
+            links = []
+            selectedNodeId = nil
+
+            addRecent(projectURL.path)
+            loadTemplatesForCurrentProject()
+            loadOrInitCurrentWorkflow()
+            appendLog("Created project: \(projectURL.path)")
+        } catch {
+            appendLog("ERROR: Create project failed: \(error)")
+        }
+    }
+
+    func closeProject() {
+        workflowSaveWorkItem?.cancel()
+        workflowSaveWorkItem = nil
+        samples = []
+        nodes = []
+        links = []
+        selectedNodeId = nil
+        outputDirectory = ""
+        projectName = "scGUI-project"
+        availableTemplates = []
+    }
+
+    private static func parseMetadata(_ text: String) -> [SampleMetadata] {
+        var out: [SampleMetadata] = []
+        let lines = text.split(whereSeparator: \.isNewline)
+        guard !lines.isEmpty else { return [] }
+        for (idx, raw) in lines.enumerated() {
+            if idx == 0 { continue }
+            let parts = raw.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
+            if parts.count < 3 { continue }
+            let sample = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
+            let group = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+            let path = parts[2].trimmingCharacters(in: .whitespacesAndNewlines)
+            let reader = (parts.count >= 4 ? parts[3] : "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if sample.isEmpty || group.isEmpty || path.isEmpty { continue }
+            out.append(SampleMetadata(sample: sample, group: group, path: path, reader: reader))
+        }
+        return out
+    }
+
+    // MARK: Canvas helpers
 
     func addNode(spec: ModuleSpec, at position: CGPoint) {
         let defaults = defaultParams(for: spec.id)
@@ -181,9 +277,7 @@ final class AppModel: ObservableObject {
 
     func defaultParams(for specId: String) -> [String: JSONValue] {
         switch specId {
-        case "scanpy.pp.filter_cells":
-            return [:]
-        case "scanpy.pp.filter_genes":
+        case "scanpy.pp.filter_cells", "scanpy.pp.filter_genes":
             return [:]
         default:
             return [:]
@@ -212,6 +306,148 @@ final class AppModel: ObservableObject {
         selectedNodeId = nil
     }
 
+    // MARK: Current workflow persistence (.scanwr/template.json)
+
+    private func currentWorkflowURL() -> URL? {
+        projectPath?.appendingPathComponent(".scanwr/template.json")
+    }
+
+    private static func emptyCurrentWorkflow() throws -> String {
+        let t = WorkflowTemplate(id: "current", name: "Current workflow", nodes: [], links: [])
+        let data = try JSONEncoder.pretty.encode(t)
+        return String(decoding: data, as: UTF8.self) + "\n"
+    }
+
+    private func loadOrInitCurrentWorkflow() {
+        guard let projectURL = projectPath else { return }
+        let scanwrDir = projectURL.appendingPathComponent(".scanwr")
+        let url = scanwrDir.appendingPathComponent("template.json")
+
+        do {
+            try FileManager.default.createDirectory(at: scanwrDir, withIntermediateDirectories: true)
+        } catch {
+            appendLog("ERROR: create .scanwr dir failed: \(error)")
+            return
+        }
+
+        if !FileManager.default.fileExists(atPath: url.path) {
+            do {
+                try Self.emptyCurrentWorkflow().write(to: url, atomically: true, encoding: .utf8)
+            } catch {
+                appendLog("ERROR: init template.json failed: \(error)")
+            }
+        }
+
+        if let t = WorkflowTemplate.load(from: url) {
+            nodes = t.nodes.map { $0.toNode() }
+            links = t.links.map { $0.toLink() }
+            selectedNodeId = nil
+            appendLog("Loaded workflow: .scanwr/template.json")
+        } else {
+            nodes = []
+            links = []
+            selectedNodeId = nil
+        }
+    }
+
+    private func schedulePersistCurrentWorkflow() {
+        guard currentWorkflowURL() != nil else { return }
+        workflowSaveWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.persistCurrentWorkflow()
+        }
+        workflowSaveWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
+    }
+
+    private func persistCurrentWorkflow() {
+        guard let url = currentWorkflowURL() else { return }
+        let t = WorkflowTemplate(id: "current", name: "Current workflow", nodes: nodes.map { WorkflowNode(from: $0) }, links: links.map { WorkflowLink(from: $0) })
+        do {
+            let data = try JSONEncoder.pretty.encode(t)
+            try data.write(to: url)
+        } catch {
+            appendLog("ERROR: write template.json failed: \(error)")
+        }
+    }
+
+    // MARK: Templates
+
+    func loadTemplatesForCurrentProject() {
+        guard let projectURL = projectPath else { return }
+        let templatesDir = projectURL.appendingPathComponent(".scanwr/templates")
+        do {
+            try FileManager.default.createDirectory(at: templatesDir, withIntermediateDirectories: true)
+        } catch {
+            appendLog("ERROR: create templates dir failed: \(error)")
+        }
+
+        var templates: [WorkflowTemplate] = []
+
+        // Bundled templates
+        if let urls = Bundle.main.urls(forResourcesWithExtension: "json", subdirectory: "templates") {
+            for u in urls {
+                if let t = WorkflowTemplate.load(from: u) { templates.append(t) }
+            }
+        }
+
+        // Project templates
+        if let files = try? FileManager.default.contentsOfDirectory(at: templatesDir, includingPropertiesForKeys: nil) {
+            for u in files where u.pathExtension.lowercased() == "json" {
+                if let t = WorkflowTemplate.load(from: u) { templates.append(t) }
+            }
+        }
+
+        var seen: Set<String> = []
+        availableTemplates = templates.filter { t in
+            if seen.contains(t.id) { return false }
+            seen.insert(t.id)
+            return true
+        }
+        .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    func importTemplate(from url: URL) {
+        guard let projectURL = projectPath else {
+            appendLog("ERROR: Open or create a project first.")
+            return
+        }
+        let destDir = projectURL.appendingPathComponent(".scanwr/templates")
+        do {
+            try FileManager.default.createDirectory(at: destDir, withIntermediateDirectories: true)
+            let dest = destDir.appendingPathComponent(url.lastPathComponent)
+            if FileManager.default.fileExists(atPath: dest.path) {
+                try FileManager.default.removeItem(at: dest)
+            }
+            try FileManager.default.copyItem(at: url, to: dest)
+            loadTemplatesForCurrentProject()
+            appendLog("Imported template: \(dest.lastPathComponent)")
+        } catch {
+            appendLog("ERROR: import template failed: \(error)")
+        }
+    }
+
+    func saveCurrentTemplate(to url: URL) {
+        let t = WorkflowTemplate.fromCurrent(nodes: nodes, links: links)
+        do {
+            let data = try JSONEncoder.pretty.encode(t)
+            try data.write(to: url)
+            appendLog("Saved template: \(url.lastPathComponent)")
+        } catch {
+            appendLog("ERROR: save template failed: \(error)")
+        }
+    }
+
+    func applyTemplate(_ t: WorkflowTemplate) {
+        nodes = t.nodes.map { $0.toNode() }
+        links = t.links.map { $0.toLink() }
+        selectedNodeId = nil
+        appendLog("Applied template: \(t.name)")
+    }
+
+    // MARK: Run
+
     func runPipeline() async {
         let outDir = outputDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
         let projName = projectName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -225,12 +461,11 @@ final class AppModel: ObservableObject {
 
         await ensureBackendStarted()
         appendLog("Running \(ordered.count) step(s) on \(samples.count) sample(s)…")
+
         isRunning = true
         progressPercent = 0
         progressMessage = "Starting…"
-        defer {
-            isRunning = false
-        }
+        defer { isRunning = false }
 
         struct RunParams: Codable {
             var outputDir: String
@@ -252,9 +487,6 @@ final class AppModel: ObservableObject {
             appendLog("OK: wrote outputs to \(summary.outputDir)")
             for r in summary.results {
                 appendLog("OK: \(r.sample) via \(r.reader) final=\(r.finalPath) shape=\(r.shape)")
-                for p in r.checkpoints {
-                    appendLog("  checkpoint: \(p)")
-                }
             }
             progressPercent = 1
             progressMessage = "Done."
@@ -263,9 +495,7 @@ final class AppModel: ObservableObject {
         }
     }
 
-    // Topological ordering for a simple DAG. For now we enforce a linear chain:
-    // - exactly one "start" node (in-degree 0)
-    // - each node has at most 1 incoming link and at most 1 outgoing link
+    // Topological ordering for a simple DAG. For now we enforce a linear chain.
     func orderedPipeline() -> [PipelineNode] {
         if nodes.isEmpty { return [] }
 
@@ -276,7 +506,6 @@ final class AppModel: ObservableObject {
         for l in links {
             inCount[l.toNodeId, default: 0] += 1
             outCount[l.fromNodeId, default: 0] += 1
-            // Keep last; we validate counts anyway.
             next[l.fromNodeId] = l.toNodeId
         }
 
@@ -299,5 +528,72 @@ final class AppModel: ObservableObject {
 
         if ordered.count != nodes.count { return nodes }
         return ordered
+    }
+}
+
+// MARK: Template model
+
+struct WorkflowTemplate: Codable, Hashable, Identifiable {
+    var id: String
+    var name: String
+    var nodes: [WorkflowNode]
+    var links: [WorkflowLink]
+
+    static func load(from url: URL) -> WorkflowTemplate? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode(WorkflowTemplate.self, from: data)
+    }
+
+    static func fromCurrent(nodes: [PipelineNode], links: [PipelineLink]) -> WorkflowTemplate {
+        WorkflowTemplate(
+            id: UUID().uuidString,
+            name: "Template",
+            nodes: nodes.map { WorkflowNode(from: $0) },
+            links: links.map { WorkflowLink(from: $0) }
+        )
+    }
+}
+
+struct WorkflowNode: Codable, Hashable {
+    var id: UUID
+    var specId: String
+    var x: Double
+    var y: Double
+    var params: [String: JSONValue]
+
+    init(from n: PipelineNode) {
+        id = n.id
+        specId = n.specId
+        x = n.position.x
+        y = n.position.y
+        params = n.params
+    }
+
+    func toNode() -> PipelineNode {
+        PipelineNode(id: id, specId: specId, position: CGPointCodable(CGPoint(x: x, y: y)), params: params)
+    }
+}
+
+struct WorkflowLink: Codable, Hashable {
+    var id: UUID
+    var fromNodeId: UUID
+    var toNodeId: UUID
+
+    init(from l: PipelineLink) {
+        id = l.id
+        fromNodeId = l.fromNodeId
+        toNodeId = l.toNodeId
+    }
+
+    func toLink() -> PipelineLink {
+        PipelineLink(id: id, fromNodeId: fromNodeId, toNodeId: toNodeId)
+    }
+}
+
+private extension JSONEncoder {
+    static var pretty: JSONEncoder {
+        let e = JSONEncoder()
+        e.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return e
     }
 }

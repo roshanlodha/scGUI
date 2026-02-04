@@ -3,11 +3,15 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST="$ROOT/dist"
-APP_NAME="scanwr"
+APP_NAME="scGUI"
 BUNDLE_ID="com.roshanlodha.scanwr"
-VERSION="0.0.10"
+VERSION="0.1.0"
 
 PY_RUNTIME_DIR="${SCANWR_PY_RUNTIME_DIR:-$DIST/python-runtime/python}"
+
+echo "Clearing scGUI cache…"
+rm -rf "$HOME/Library/Caches/scGUI" 2>/dev/null || true
+rm -rf "/tmp/scgui-cache" 2>/dev/null || true
 
 if [[ -z "$PY_RUNTIME_DIR" ]]; then
   echo "ERROR: Set SCANWR_PY_RUNTIME_DIR to a relocatable Python runtime directory to bundle." >&2

@@ -8,19 +8,20 @@ struct WelcomeView: View {
     @State private var showCreatePicker = false
     @State private var newProjectName: String = ""
     @State private var createBaseDir: URL?
+    @State private var showClearCacheConfirm: Bool = false
 
     var body: some View {
         HStack(spacing: 0) {
             // Left: branding
             VStack(alignment: .leading, spacing: 14) {
                 Spacer()
-                Text("scanwr")
+                Text("scGUI")
                     .font(.system(size: 44, weight: .bold))
                 Text("Single-cell pipelines for non-coders.")
                     .font(.title3)
                     .foregroundStyle(.secondary)
                 Spacer()
-                Text("v0.0.9+")
+                Text("scGUI, formerly scAnWr")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -53,6 +54,23 @@ struct WelcomeView: View {
                     } label: {
                         Label("New Project…", systemImage: "plus.rectangle.on.folder")
                     }
+
+                    Spacer()
+
+                    Button {
+                        showClearCacheConfirm = true
+                    } label: {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                    }
+                    .help("Clear app cache")
+                }
+                .alert("Clear app cache?", isPresented: $showClearCacheConfirm) {
+                    Button("Clear", role: .destructive) {
+                        Task { await model.clearAppCache() }
+                    }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("This clears cached files (matplotlib/fontconfig/numba) and restarts the backend.")
                 }
 
                 if let base = createBaseDir {
@@ -142,4 +160,3 @@ struct WelcomeView: View {
         }
     }
 }
-

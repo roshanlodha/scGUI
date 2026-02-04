@@ -243,8 +243,22 @@ class ScanwrApp(ttk.Frame):
         self._refresh_pipeline_tree()
 
     def _default_params_for(self, spec: ModuleSpec) -> Dict[str, object]:
+        if spec.id == "pp.filter_cells":
+            return {"min_genes": 100}
+        if spec.id == "pp.filter_genes":
+            return {"min_cells": 3}
+        if spec.id == "pp.scrublet":
+            return {"batch_key": "sample"}
         if spec.id == "pp.calculate_qc_metrics":
-            return {"qc_vars": "", "percent_top": "50,100", "log1p": True}
+            return {
+                "use_mt": True,
+                "use_ribo": True,
+                "use_hb": True,
+                "percent_top": "",
+                "log1p": True,
+            }
+        if spec.id == "pp.normalize_total":
+            return {"target_sum": ""}
         return {}
 
     def _build_pipeline_list(self, parent: ttk.Frame) -> None:
@@ -339,29 +353,93 @@ class ScanwrApp(ttk.Frame):
         body = ttk.Frame(self.config_frame)
         body.pack(fill="x", padx=10, pady=(0, 10))
 
+        if step.spec.id == "pp.filter_cells":
+            self._render_filter_cells_config(body, step)
+            return
+        if step.spec.id == "pp.filter_genes":
+            self._render_filter_genes_config(body, step)
+            return
+        if step.spec.id == "pp.scrublet":
+            self._render_scrublet_config(body, step)
+            return
         if step.spec.id == "pp.calculate_qc_metrics":
             self._render_calculate_qc_metrics_config(body, step)
+            return
+        if step.spec.id == "pp.normalize_total":
+            self._render_normalize_total_config(body, step)
             return
 
         ttk.Label(body, text="No settings available.").pack(anchor="w")
 
+    def _render_filter_cells_config(self, parent: ttk.Frame, step: ModuleInstance) -> None:
+        min_genes = tk.StringVar(value=str(step.params.get("min_genes", 100)))
+
+        def commit() -> None:
+            try:
+                step.params["min_genes"] = int(min_genes.get())
+            except ValueError:
+                messagebox.showerror("Invalid value", "min_genes must be an integer.")
+
+        parent.columnconfigure(1, weight=1)
+        ttk.Label(parent, text="min_genes").grid(row=0, column=0, sticky="w")
+        ttk.Entry(parent, textvariable=min_genes).grid(row=0, column=1, sticky="ew", padx=(8, 0))
+        ttk.Button(parent, text="Apply", command=commit).grid(row=1, column=1, sticky="e", pady=(10, 0))
+
+    def _render_filter_genes_config(self, parent: ttk.Frame, step: ModuleInstance) -> None:
+        min_cells = tk.StringVar(value=str(step.params.get("min_cells", 3)))
+
+        def commit() -> None:
+            try:
+                step.params["min_cells"] = int(min_cells.get())
+            except ValueError:
+                messagebox.showerror("Invalid value", "min_cells must be an integer.")
+
+        parent.columnconfigure(1, weight=1)
+        ttk.Label(parent, text="min_cells").grid(row=0, column=0, sticky="w")
+        ttk.Entry(parent, textvariable=min_cells).grid(row=0, column=1, sticky="ew", padx=(8, 0))
+        ttk.Button(parent, text="Apply", command=commit).grid(row=1, column=1, sticky="e", pady=(10, 0))
+
+    def _render_scrublet_config(self, parent: ttk.Frame, step: ModuleInstance) -> None:
+        batch_key = tk.StringVar(value=str(step.params.get("batch_key", "sample")))
+
+        def commit() -> None:
+            step.params["batch_key"] = batch_key.get().strip()
+
+        parent.columnconfigure(1, weight=1)
+        ttk.Label(parent, text="batch_key (obs column; blank=none)").grid(
+            row=0, column=0, sticky="w"
+        )
+        ttk.Entry(parent, textvariable=batch_key).grid(row=0, column=1, sticky="ew", padx=(8, 0))
+        ttk.Button(parent, text="Apply", command=commit).grid(row=1, column=1, sticky="e", pady=(10, 0))
+
     def _render_calculate_qc_metrics_config(self, parent: ttk.Frame, step: ModuleInstance) -> None:
-        qc_vars = tk.StringVar(value=str(step.params.get("qc_vars", "") or ""))
+        use_mt = tk.BooleanVar(value=bool(step.params.get("use_mt", True)))
+        use_ribo = tk.BooleanVar(value=bool(step.params.get("use_ribo", True)))
+        use_hb = tk.BooleanVar(value=bool(step.params.get("use_hb", True)))
         percent_top = tk.StringVar(value=str(step.params.get("percent_top", "") or ""))
         log1p = tk.BooleanVar(value=bool(step.params.get("log1p", True)))
 
         def commit() -> None:
-            step.params["qc_vars"] = qc_vars.get()
+            step.params["use_mt"] = bool(use_mt.get())
+            step.params["use_ribo"] = bool(use_ribo.get())
+            step.params["use_hb"] = bool(use_hb.get())
             step.params["percent_top"] = percent_top.get()
             step.params["log1p"] = bool(log1p.get())
 
         parent.columnconfigure(1, weight=1)
 
-        ttk.Label(parent, text="qc_vars (comma-separated)").grid(row=0, column=0, sticky="w")
-        e1 = ttk.Entry(parent, textvariable=qc_vars)
-        e1.grid(row=0, column=1, sticky="ew", padx=(8, 0))
+        ttk.Label(parent, text="qc_vars").grid(row=0, column=0, sticky="w")
+        vars_frame = ttk.Frame(parent)
+        vars_frame.grid(row=0, column=1, sticky="w", padx=(8, 0))
+        ttk.Checkbutton(vars_frame, text="mitochondrial (mt)", variable=use_mt).pack(
+            side="left", padx=(0, 10)
+        )
+        ttk.Checkbutton(vars_frame, text="ribosomal (ribo)", variable=use_ribo).pack(
+            side="left", padx=(0, 10)
+        )
+        ttk.Checkbutton(vars_frame, text="hemoglobin (hb)", variable=use_hb).pack(side="left")
 
-        ttk.Label(parent, text="percent_top (e.g. 50,100)").grid(
+        ttk.Label(parent, text="percent_top (e.g. 50,100; blank=scanpy default)").grid(
             row=1, column=0, sticky="w", pady=(8, 0)
         )
         e2 = ttk.Entry(parent, textvariable=percent_top)
@@ -371,6 +449,17 @@ class ScanwrApp(ttk.Frame):
         cb.grid(row=2, column=1, sticky="w", pady=(8, 0))
 
         ttk.Button(parent, text="Apply", command=commit).grid(row=3, column=1, sticky="e", pady=(10, 0))
+
+    def _render_normalize_total_config(self, parent: ttk.Frame, step: ModuleInstance) -> None:
+        target_sum = tk.StringVar(value=str(step.params.get("target_sum", "") or ""))
+
+        def commit() -> None:
+            step.params["target_sum"] = target_sum.get().strip()
+
+        parent.columnconfigure(1, weight=1)
+        ttk.Label(parent, text="target_sum (blank=scanpy default)").grid(row=0, column=0, sticky="w")
+        ttk.Entry(parent, textvariable=target_sum).grid(row=0, column=1, sticky="ew", padx=(8, 0))
+        ttk.Button(parent, text="Apply", command=commit).grid(row=1, column=1, sticky="e", pady=(10, 0))
 
     def _append_log(self, text: str) -> None:
         self.log.configure(state="normal")
@@ -415,4 +504,3 @@ def main() -> int:
     ScanwrApp(root)
     root.mainloop()
     return 0
-

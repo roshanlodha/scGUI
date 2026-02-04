@@ -1,6 +1,6 @@
-# ScanwrMac (SwiftUI prototype)
+# scGUI (SwiftUI prototype)
 
-This is a native SwiftUI macOS front-end that talks to a Python JSON-RPC backend.
+scGUI, formerly scAnWr, is a native SwiftUI macOS front-end that talks to a Python JSON-RPC backend.
 
 ## Run (development)
 
@@ -71,4 +71,4 @@ cd mac/ScanwrMac
 ./scripts/make_dmg.sh
 ```
 
-Outputs land in `mac/ScanwrMac/dist/` (e.g. `scanwr-0.0.10.dmg`).
+Outputs land in `mac/ScanwrMac/dist/` (e.g. `scGUI-0.0.12.dmg`).

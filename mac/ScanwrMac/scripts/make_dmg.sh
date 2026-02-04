@@ -3,9 +3,9 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST="$ROOT/dist"
-APP_NAME="scanwr"
-DMG_NAME="scanwr"
-VERSION="0.0.10"
+APP_NAME="scGUI"
+DMG_NAME="scGUI"
+VERSION="0.1.0"
 
 APP="$DIST/$APP_NAME.app"
 if [[ ! -d "$APP" ]]; then

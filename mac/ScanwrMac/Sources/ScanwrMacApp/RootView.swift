@@ -185,30 +185,67 @@ private struct AddModulePopover: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Add a module").font(.headline)
             TextField("Search modules…", text: $query)
-            List {
-                ForEach(ModuleGroup.allCases, id: \.self) { grp in
-                    Section(grp.title) {
-                        ForEach(filtered(group: grp)) { spec in
-                            Button {
-                                onPick(spec)
-                            } label: {
-                                HStack {
-                                    Text(spec.title)
-                                    Spacer()
-                                    if let ns = spec.namespace, ns != "core" {
-                                        Text(ns == "experimental" ? "exp" : "ext")
+            if model.isLoadingModules {
+                VStack(spacing: 10) {
+                    Spacer()
+                    ProgressView("Loading modules…")
+                    Text("Starting Python backend (first launch may take ~10–30s).")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 18)
+                    Spacer()
+                }
+            } else if model.availableModules.isEmpty {
+                VStack(spacing: 10) {
+                    Spacer()
+                    Text("No modules available.")
+                        .font(.headline)
+                    if let err = model.moduleLoadError {
+                        Text(err)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 18)
+                            .textSelection(.enabled)
+                    } else {
+                        Text("If this is your first launch, open the Console for backend logs and retry.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 18)
+                    }
+                    Button("Retry") {
+                        Task { await model.loadModules() }
+                    }
+                    Spacer()
+                }
+            } else {
+                List {
+                    ForEach(ModuleGroup.allCases, id: \.self) { grp in
+                        Section(grp.title) {
+                            ForEach(filtered(group: grp)) { spec in
+                                Button {
+                                    onPick(spec)
+                                } label: {
+                                    HStack {
+                                        Text(spec.title)
+                                        Spacer()
+                                        if let ns = spec.namespace, ns != "core" {
+                                            Text(ns == "experimental" ? "exp" : "ext")
+                                                .font(.caption)
+                                                .padding(.horizontal, 6)
+                                                .padding(.vertical, 2)
+                                                .background(Color.primary.opacity(0.10))
+                                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                                        }
+                                        Text(grp.badge)
                                             .font(.caption)
                                             .padding(.horizontal, 6)
                                             .padding(.vertical, 2)
-                                            .background(Color.primary.opacity(0.10))
+                                            .background(Color(hex: grp.colorHex).opacity(0.15))
                                             .clipShape(RoundedRectangle(cornerRadius: 6))
                                     }
-                                    Text(grp.badge)
-                                        .font(.caption)
-                                        .padding(.horizontal, 6)
-                                        .padding(.vertical, 2)
-                                        .background(Color(hex: grp.colorHex).opacity(0.15))
-                                        .clipShape(RoundedRectangle(cornerRadius: 6))
                                 }
                             }
                         }

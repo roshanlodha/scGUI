@@ -97,10 +97,15 @@ final class PythonRPCClient {
         p.standardInput = inPipe
         p.standardOutput = outPipe
         p.standardError = outPipe
-        p.environment = (ProcessInfo.processInfo.environment).merging(
-            ["PYTHONUNBUFFERED": "1"],
-            uniquingKeysWith: { _, new in new }
-        )
+        var env = ProcessInfo.processInfo.environment
+        env["PYTHONUNBUFFERED"] = "1"
+        if let cacheBase = Self.ensureStableCacheDir() {
+            // Prevent matplotlib/fontconfig/numba from writing caches into unwritable locations.
+            env.setdefault("MPLCONFIGDIR", cacheBase.appendingPathComponent("mpl").path)
+            env.setdefault("XDG_CACHE_HOME", cacheBase.appendingPathComponent("xdg").path)
+            env.setdefault("NUMBA_CACHE_DIR", cacheBase.appendingPathComponent("numba").path)
+        }
+        p.environment = env
 
         try p.run()
 
@@ -230,6 +235,26 @@ final class PythonRPCClient {
         return nil
     }
 
+    private static func ensureStableCacheDir() -> URL? {
+        func ensure(_ dir: URL) -> URL? {
+            do {
+                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                return dir
+            } catch {
+                return nil
+            }
+        }
+
+        if let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first {
+            if let ok = ensure(base.appendingPathComponent("scGUI", isDirectory: true)) {
+                return ok
+            }
+        }
+
+        // Fallback for restricted environments.
+        return ensure(FileManager.default.temporaryDirectory.appendingPathComponent("scgui-cache", isDirectory: true))
+    }
+
     private static func resolveServerScriptURL() -> URL? {
         if let url = Bundle.main.url(forResource: "scanwr_rpc_server", withExtension: "py") {
             return url
@@ -261,6 +286,14 @@ private struct RPCRequest: Encodable {
     let id: Int
     let method: String
     let params: AnyEncodable
+}
+
+private extension Dictionary where Key == String, Value == String {
+    mutating func setdefault(_ key: String, _ value: String) {
+        if self[key] == nil {
+            self[key] = value
+        }
+    }
 }
 
 private struct AnyEncodable: Encodable {

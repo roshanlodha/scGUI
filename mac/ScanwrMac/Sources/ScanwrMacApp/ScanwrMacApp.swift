@@ -10,5 +10,8 @@ struct ScanwrMacApp: App {
                 .environmentObject(appModel)
         }
         .windowStyle(.titleBar)
+        .commands {
+            MenuCommands(model: appModel)
+        }
     }
 }
