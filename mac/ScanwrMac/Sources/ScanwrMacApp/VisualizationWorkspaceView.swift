@@ -23,18 +23,13 @@ private struct VisualizationEditorSidebar: View {
     var body: some View {
         VStack(spacing: 10) {
             HStack(spacing: 10) {
-                Text("Plot")
+                Text("Customize Plot")
                     .font(.headline)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
                 Spacer()
-                Button {
-                    showSettings = true
-                } label: {
-                    Image(systemName: "info.circle")
-                        .imageScale(.medium)
-                }
-                .buttonStyle(.plain)
-                .help("Settings")
             }
+            .padding(.horizontal, 4)
 
             Divider()
 

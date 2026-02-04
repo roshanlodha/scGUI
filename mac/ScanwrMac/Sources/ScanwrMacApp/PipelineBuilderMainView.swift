@@ -211,14 +211,15 @@ private struct PipelineStepRow: View {
         let group = spec?.group ?? .pp
         let title = spec?.title ?? node.specId
         let subtitle = spec?.scanpyQualname ?? node.specId
+        let groupColor = Color(hex: group.colorHex)
 
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 12) {
                 Text("\(stepIndex)")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(groupColor)
                     .frame(width: 22, height: 22)
-                    .background(Color.primary.opacity(0.08))
+                    .background(groupColor.opacity(0.18))
                     .clipShape(RoundedRectangle(cornerRadius: 7))
 
                 VStack(alignment: .leading, spacing: 2) {
@@ -233,35 +234,8 @@ private struct PipelineStepRow: View {
 
                 Spacer(minLength: 10)
 
-                HStack(spacing: 6) {
-                    Button {
-                        withAnimation(.snappy(duration: 0.12)) {
-                            model.moveNode(id: node.id, by: -1)
-                        }
-                    } label: {
-                        Image(systemName: "chevron.up")
-                    }
-                    .buttonStyle(.borderless)
-                    .disabled(stepIndex == 1 || model.isRunning)
-
-                    Button {
-                        withAnimation(.snappy(duration: 0.12)) {
-                            model.moveNode(id: node.id, by: 1)
-                        }
-                    } label: {
-                        Image(systemName: "chevron.down")
-                    }
-                    .buttonStyle(.borderless)
-                    .disabled(stepIndex == model.nodes.count || model.isRunning)
-                }
-                .foregroundStyle(.secondary)
-
-                Text(group.badge)
-                    .font(.caption)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(Color(hex: group.colorHex).opacity(0.16))
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                Image(systemName: "chevron.up.chevron.down")
+                    .foregroundStyle(.secondary)
             }
 
             if isExpanded, let binding = model.nodeBinding(id: node.id) {

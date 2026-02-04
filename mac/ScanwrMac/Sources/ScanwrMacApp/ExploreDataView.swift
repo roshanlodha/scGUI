@@ -123,7 +123,7 @@ private struct KeyPickerSheet: View {
             return "Other"
         }
 
-        let grouped = Dictionary(grouping: filtered, by: sectionName)
+        let grouped = Dictionary(grouping: filtered, by: sectionName(for:))
         let order = ["Embeddings (obsm)", "Metadata (obs)", "Genes (var)", "Other"]
         return order.compactMap { name in
             guard let items = grouped[name], !items.isEmpty else { return nil }
@@ -153,21 +153,13 @@ struct ExploreDataView: View {
     @State private var yRef: String = ""
     @State private var colorRef: String = ""
 
-    // Expression source
-    @State private var useRaw: Bool = false
-    @State private var layer: String = ""
-
     // Generic styling
     @State private var title: String = ""
     @State private var subtitle: String = ""
     @State private var legendTitle: String = ""
     @State private var xLabel: String = ""
     @State private var yLabel: String = ""
-    @State private var xTickRotation: String = ""
-
-    // Scatter styling
-    @State private var pointSize: String = "10"
-    @State private var alpha: String = "0.8"
+    @State private var xTickRotationDeg: Double = 0
 
     // Density styling
     @State private var densityFill: Bool = true
@@ -256,11 +248,22 @@ struct ExploreDataView: View {
     private var dataSection: some View {
         GroupBox("Data") {
             VStack(alignment: .leading, spacing: 10) {
-                Picker("Sample", selection: $selectedSample) {
-                    Text("Select…").tag("")
-                    ForEach(model.samples.map(\.sample), id: \.self) { s in
-                        Text(s).tag(s)
+                HStack(spacing: 10) {
+                    Picker("Sample", selection: $selectedSample) {
+                        Text("Select…").tag("")
+                        ForEach(model.samples.map(\.sample), id: \.self) { s in
+                            Text(s).tag(s)
+                        }
                     }
+                    Button {
+                        Task { await loadInspectIfPossible(force: true) }
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Refresh keys")
+                    .disabled(selectedSample.isEmpty || isInspecting)
+                    if isInspecting { ProgressView().controlSize(.small) }
                 }
 
                 Picker("Plot type", selection: $plotType) {
@@ -269,21 +272,6 @@ struct ExploreDataView: View {
                     }
                 }
                 .pickerStyle(.segmented)
-
-                LabeledContent("h5ad") {
-                    Text(h5adPathForSelection() ?? "—")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-
-                HStack {
-                    Button("Reload keys") { Task { await loadInspectIfPossible(force: true) } }
-                        .disabled(selectedSample.isEmpty || isInspecting)
-                    if isInspecting { ProgressView().controlSize(.small) }
-                    Spacer()
-                }
 
                 if let inspectError {
                     Text(inspectError)
@@ -302,63 +290,56 @@ struct ExploreDataView: View {
                 if let inspect {
                     switch plotType {
                     case .scatter:
-                        keyPicker("x", selection: $xRef, options: xOptions(inspect: inspect))
-                        keyPicker("y", selection: $yRef, options: yOptions(inspect: inspect))
-                        keyPicker(
-                            "color (optional)",
-                            selection: $colorRef,
-                            options: colorOptions(inspect: inspect),
-                            allowNone: true
-                        )
-
                         HStack(spacing: 10) {
-                            TextField("point size", text: $pointSize)
-                                .frame(width: 120)
-                            TextField("alpha (0–1)", text: $alpha)
-                                .frame(width: 120)
-                            Spacer()
+                            keyPicker("x", selection: $xRef, options: xOptions(inspect: inspect))
+                                .frame(maxWidth: .infinity)
+                            keyPicker("y", selection: $yRef, options: yOptions(inspect: inspect))
+                                .frame(maxWidth: .infinity)
+                            keyPicker(
+                                "color",
+                                selection: $colorRef,
+                                options: colorOptions(inspect: inspect),
+                                allowNone: true
+                            )
+                            .frame(maxWidth: .infinity)
                         }
 
                     case .violin, .box:
-                        keyPicker(
-                            "x (category, optional)",
-                            selection: $xRef,
-                            options: xOptions(inspect: inspect),
-                            allowNone: true
-                        )
-                        keyPicker("y (value)", selection: $yRef, options: yOptions(inspect: inspect))
-                        keyPicker(
-                            "color (optional)",
-                            selection: $colorRef,
-                            options: colorOptions(inspect: inspect),
-                            allowNone: true
-                        )
-                    case .density:
-                        keyPicker(
-                            "group (optional)",
-                            selection: $xRef,
-                            options: xOptions(inspect: inspect),
-                            allowNone: true
-                        )
-                        keyPicker("value", selection: $yRef, options: yOptions(inspect: inspect))
-                        Toggle("fill", isOn: $densityFill)
-                    }
-
-                    Divider()
-
-                    HStack(spacing: 10) {
-                        Toggle("use raw", isOn: $useRaw)
-                            .disabled(!inspect.hasRaw)
-
-                        Picker("layer", selection: $layer) {
-                            Text("(default)").tag("")
-                            ForEach(inspect.layers, id: \.self) { l in
-                                Text(l).tag(l)
-                            }
+                        HStack(spacing: 10) {
+                            keyPicker(
+                                "x",
+                                selection: $xRef,
+                                options: xOptions(inspect: inspect),
+                                allowNone: true
+                            )
+                            .frame(maxWidth: .infinity)
+                            keyPicker("y", selection: $yRef, options: yOptions(inspect: inspect))
+                                .frame(maxWidth: .infinity)
+                            keyPicker(
+                                "color",
+                                selection: $colorRef,
+                                options: colorOptions(inspect: inspect),
+                                allowNone: true
+                            )
+                            .frame(maxWidth: .infinity)
                         }
-                        .frame(width: 220)
+                    case .density:
+                        HStack(spacing: 10) {
+                            keyPicker(
+                                "group",
+                                selection: $xRef,
+                                options: xOptions(inspect: inspect),
+                                allowNone: true
+                            )
+                            .frame(maxWidth: .infinity)
 
-                        Spacer()
+                            keyPicker("value", selection: $yRef, options: yOptions(inspect: inspect))
+                                .frame(maxWidth: .infinity)
+
+                            Toggle("fill", isOn: $densityFill)
+                                .toggleStyle(.switch)
+                                .frame(width: 72, alignment: .leading)
+                        }
                     }
                 } else {
                     Text("Select a sample to load keys.")
@@ -392,10 +373,18 @@ struct ExploreDataView: View {
                     TextField("Y-axis label", text: $yLabel)
                 }
 
-                HStack(spacing: 10) {
-                    TextField("X tick rotation (deg)", text: $xTickRotation)
-                        .frame(width: 180)
-                    Spacer()
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text("X tick rotation")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Text("\(Int(xTickRotationDeg.rounded()))°")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+                    Slider(value: $xTickRotationDeg, in: 0...90, step: 1)
                 }
             }
             .padding(6)
@@ -567,10 +556,6 @@ struct ExploreDataView: View {
     }
 
     private func applyPlotTypeDefaults() {
-        if plotType == .scatter {
-            if pointSize.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { pointSize = "10" }
-            if alpha.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { alpha = "0.8" }
-        }
         if let inspect {
             ensureKeySelectionsValid(inspect: inspect)
         }
@@ -598,7 +583,7 @@ struct ExploreDataView: View {
         inspectError = nil
         guard let path = h5adPathForSelection() else { return }
         guard FileManager.default.fileExists(atPath: path) else {
-            inspectError = "Missing .h5ad for sample. Run the pipeline first (expected at: \(path))"
+            inspectError = "Missing .h5ad for sample. Run the pipeline first."
             return
         }
         if inspect != nil, !force { return }
@@ -670,16 +655,16 @@ struct ExploreDataView: View {
             x: xRef.isEmpty ? nil : xRef,
             y: yRef.isEmpty ? nil : yRef,
             color: colorRef.isEmpty ? nil : colorRef,
-            layer: layer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : layer,
-            useRaw: useRaw ? true : nil,
+            layer: nil,
+            useRaw: nil,
             title: title,
             subtitle: subtitle,
             legendTitle: legendTitle,
             xLabel: xLabel,
             yLabel: yLabel,
-            xTickRotation: Double(xTickRotation.trimmingCharacters(in: .whitespacesAndNewlines)),
-            pointSize: Double(pointSize.trimmingCharacters(in: .whitespacesAndNewlines)),
-            alpha: Double(alpha.trimmingCharacters(in: .whitespacesAndNewlines)),
+            xTickRotation: xTickRotationDeg > 0 ? xTickRotationDeg : nil,
+            pointSize: nil,
+            alpha: nil,
             densityFill: (plotType == .density ? densityFill : nil),
             outputPath: out
         )

@@ -13,6 +13,7 @@ set -euo pipefail
 #   ./rebuild_app.sh --open
 #   ./rebuild_app.sh --no-dmg
 #   ./rebuild_app.sh --reuse-runtime
+#   ./rebuild_app.sh --skip-python
 #
 # Notes:
 # - For offline-friendly builds, this repo prefers SCANWR_PY_MODE=venv (copy from ./venv).
@@ -23,11 +24,13 @@ set -euo pipefail
 OPEN_APP="0"
 CREATE_DMG="1"
 REUSE_RUNTIME="0"
+SKIP_PYTHON="0"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --open) OPEN_APP="1"; shift ;;
     --no-dmg) CREATE_DMG="0"; shift ;;
     --reuse-runtime) REUSE_RUNTIME="1"; shift ;;
+    --skip-python) SKIP_PYTHON="1"; shift ;;
     -h|--help)
       sed -n '1,80p' "$0"
       exit 0
@@ -49,7 +52,9 @@ echo "==> Clearing app cache…"
 rm -rf "$HOME/Library/Caches/scGUI" 2>/dev/null || true
 rm -rf "/tmp/scgui-cache" 2>/dev/null || true
 
-if [[ "$REUSE_RUNTIME" == "1" && -x "$RUNTIME_DIR/bin/python3" ]]; then
+if [[ "$SKIP_PYTHON" == "1" ]]; then
+  echo "==> Skipping Python runtime rebuild (--skip-python)…"
+elif [[ "$REUSE_RUNTIME" == "1" && -x "$RUNTIME_DIR/bin/python3" ]]; then
   echo "==> Reusing existing embedded Python runtime…"
 else
   echo "==> (Re)building embedded Python runtime…"
@@ -59,6 +64,9 @@ fi
 
 if [[ ! -x "$RUNTIME_DIR/bin/python3" ]]; then
   echo "ERROR: embedded runtime not found/executable at: $RUNTIME_DIR/bin/python3" >&2
+  if [[ "$SKIP_PYTHON" == "1" ]]; then
+    echo "HINT: run without --skip-python to build the runtime, or use --reuse-runtime once it exists." >&2
+  fi
   exit 3
 fi
 
