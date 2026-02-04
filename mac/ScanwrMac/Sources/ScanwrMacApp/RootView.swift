@@ -14,7 +14,8 @@ struct RootView: View {
                 onAddModule: { showAddModule = true },
                 onSettings: { showSettings = true },
                 onConsole: { showConsole.toggle() },
-                onRun: { Task { await model.runPipeline() } }
+                onRun: { model.startRun() },
+                onStop: { Task { await model.stopRun() } }
             )
             Divider()
             ZStack(alignment: .bottom) {
@@ -51,6 +52,7 @@ private struct TopBar: View {
     var onSettings: () -> Void
     var onConsole: () -> Void
     var onRun: () -> Void
+    var onStop: () -> Void
 
     var body: some View {
         VStack(spacing: 8) {
@@ -88,20 +90,29 @@ private struct TopBar: View {
                 }
                 .help("Console")
 
-                Button {
-                    onRun()
-                } label: {
-                    Image(systemName: "play.circle.fill")
-                        .imageScale(.large)
+                if model.isRunning {
+                    Button {
+                        onStop()
+                    } label: {
+                        Image(systemName: "stop.circle.fill")
+                            .imageScale(.large)
+                    }
+                    .help("Stop run")
+                } else {
+                    Button {
+                        onRun()
+                    } label: {
+                        Image(systemName: "play.circle.fill")
+                            .imageScale(.large)
+                    }
+                    .help("Run pipeline")
+                    .disabled(
+                        model.outputDirectory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        || model.projectName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        || model.samples.isEmpty
+                        || model.nodes.isEmpty
+                    )
                 }
-                .help("Run pipeline")
-                .disabled(
-                    model.isRunning
-                    || model.outputDirectory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    || model.projectName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    || model.samples.isEmpty
-                    || model.nodes.isEmpty
-                )
             }
 
             if model.isRunning {

@@ -9,6 +9,7 @@ struct WelcomeView: View {
     @State private var newProjectName: String = ""
     @State private var createBaseDir: URL?
     @State private var showClearCacheConfirm: Bool = false
+    @State private var showSettings: Bool = false
 
     var body: some View {
         HStack(spacing: 0) {
@@ -56,6 +57,13 @@ struct WelcomeView: View {
                     }
 
                     Spacer()
+
+                    Button {
+                        showSettings = true
+                    } label: {
+                        Image(systemName: "gearshape")
+                    }
+                    .help("Settings")
 
                     Button {
                         showClearCacheConfirm = true
@@ -139,6 +147,7 @@ struct WelcomeView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .onAppear { model.loadRecents() }
+        .sheet(isPresented: $showSettings) { SettingsSheet() }
         .fileImporter(
             isPresented: $showOpenPicker,
             allowedContentTypes: [.folder],

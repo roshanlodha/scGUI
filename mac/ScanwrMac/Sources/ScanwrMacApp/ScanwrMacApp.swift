@@ -13,5 +13,11 @@ struct ScanwrMacApp: App {
         .commands {
             MenuCommands(model: appModel)
         }
+
+        // Provides the standard macOS “Preferences…” menu item (⌘,) automatically.
+        Settings {
+            SettingsSheet()
+                .environmentObject(appModel)
+        }
     }
 }

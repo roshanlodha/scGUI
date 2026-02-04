@@ -1,6 +1,11 @@
-# scGUI (SwiftUI prototype)
+# scGUI (macOS app)
 
 scGUI, formerly scAnWr, is a native SwiftUI macOS front-end that talks to a Python JSON-RPC backend.
+
+## Notes
+
+- Project state is persisted under `Project/.scanwr/` (including the current canvas workflow in `template.json`).
+- The Welcome screen includes buttons for Settings (verbosity slider) and clearing app cache.
 
 ## Run (development)
 
@@ -15,6 +20,8 @@ SCANWR_PYTHON=/Users/roshanlodha/Documents/scanwr/venv/bin/python swift run Scan
 ## Packaging (.app + .dmg)
 
 The app bundle id is `com.roshanlodha.scanwr`.
+
+Current release version: `0.1.1`
 
 ### 1) Provide a relocatable Python runtime
 
@@ -71,4 +78,4 @@ cd mac/ScanwrMac
 ./scripts/make_dmg.sh
 ```
 
-Outputs land in `mac/ScanwrMac/dist/` (e.g. `scGUI-0.0.12.dmg`).
+Outputs land in `mac/ScanwrMac/dist/` (e.g. `scGUI-0.1.1.dmg`).

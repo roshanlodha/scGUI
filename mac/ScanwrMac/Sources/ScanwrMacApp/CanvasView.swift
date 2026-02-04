@@ -6,6 +6,7 @@ struct CanvasView: View {
     @State private var linkingFromNodeId: UUID?
     @State private var isLinking: Bool = false
     @State private var linkingDragPoint: CGPoint = .zero
+    @FocusState private var canvasFocused: Bool
 
     var body: some View {
         GeometryReader { geo in
@@ -27,6 +28,7 @@ struct CanvasView: View {
                         isLinkTarget: isLinking && linkingFromNodeId != nil && linkingFromNodeId != node.id,
                         spec: model.spec(for: node.specId),
                         onSelect: {
+                            canvasFocused = true
                             if let from = linkingFromNodeId, from != node.id {
                                 model.addLink(from: from, to: node.id)
                                 linkingFromNodeId = nil
@@ -44,6 +46,7 @@ struct CanvasView: View {
                             }
                         },
                         onStartLink: { startPoint in
+                            canvasFocused = true
                             linkingFromNodeId = node.id
                             linkingDragPoint = startPoint
                             isLinking = true
@@ -97,6 +100,21 @@ struct CanvasView: View {
             .coordinateSpace(name: "canvas")
             .contentShape(Rectangle())
             .onTapGesture {
+                canvasFocused = true
+                if isLinking {
+                    linkingFromNodeId = nil
+                    isLinking = false
+                } else {
+                    model.selectedNodeId = nil
+                }
+            }
+            .focusable(true)
+            .focused($canvasFocused)
+            .onDeleteCommand {
+                model.removeSelectedNode()
+            }
+            .onExitCommand {
+                // ESC: close inspector / cancel linking
                 if isLinking {
                     linkingFromNodeId = nil
                     isLinking = false

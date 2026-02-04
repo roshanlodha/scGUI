@@ -34,6 +34,10 @@ struct NodeInspector: View {
                 FilterCellsInspector(params: $node.params)
             } else if node.specId == "scanpy.pp.filter_genes" {
                 FilterGenesInspector(params: $node.params)
+            } else if node.specId == "scanpy.pp.scrublet" {
+                ScrubletInspector(params: $node.params)
+            } else if node.specId == "scanpy.pp.normalize_total" {
+                NormalizeTotalInspector(params: $node.params)
             } else {
                 GenericParamsInspector(params: $node.params)
             }
@@ -166,39 +170,20 @@ private struct CalculateQCMetricsInspector: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Parameters").font(.subheadline).bold()
 
-            LabeledContent("expr_type") {
-                TextField("", text: bindingString("expr_type"))
-                    .frame(width: 220)
-            }
+            Text("Select which gene sets to calculate QC metrics for.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
 
-            LabeledContent("var_type") {
-                TextField("", text: bindingString("var_type"))
-                    .frame(width: 220)
-            }
+            Toggle("mitochondrial (mt)", isOn: bindingBool("use_mt", default: true))
+            Toggle("ribosomal (ribo)", isOn: bindingBool("use_ribo", default: true))
+            Toggle("hemoglobin (hb)", isOn: bindingBool("use_hb", default: true))
 
-            LabeledContent("qc_vars (comma-separated)") {
-                TextField("", text: bindingString("qc_vars"))
-                    .frame(width: 220)
-            }
-
-            LabeledContent("percent_top (e.g. 50,100,200,500)") {
+            LabeledContent("percent_top (optional; e.g. 50,100)") {
                 TextField("", text: bindingString("percent_top"))
                     .frame(width: 220)
             }
 
-            LabeledContent("layer (optional)") {
-                TextField("", text: bindingString("layer"))
-                    .frame(width: 220)
-            }
-
-            Toggle("use_raw", isOn: bindingBool("use_raw", default: false))
-            Toggle("inplace", isOn: bindingBool("inplace", default: false))
             Toggle("log1p", isOn: bindingBool("log1p", default: true))
-
-            LabeledContent("parallel (optional)") {
-                TextField("", text: bindingString("parallel"))
-                    .frame(width: 220)
-            }
         }
     }
 
@@ -213,6 +198,56 @@ private struct CalculateQCMetricsInspector: View {
         Binding<Bool>(
             get: { params[key]?.boolValue ?? def },
             set: { params[key] = .bool($0) }
+        )
+    }
+}
+
+private struct ScrubletInspector: View {
+    @Binding var params: [String: JSONValue]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Parameters").font(.subheadline).bold()
+            Text("If set, `batch_key` is an obs column used to run Scrublet per-batch.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            LabeledContent("batch_key") {
+                TextField("", text: bindingString("batch_key"))
+                    .frame(width: 220)
+            }
+        }
+    }
+
+    private func bindingString(_ key: String) -> Binding<String> {
+        Binding<String>(
+            get: { params[key]?.stringValue ?? "" },
+            set: { params[key] = .string($0) }
+        )
+    }
+}
+
+private struct NormalizeTotalInspector: View {
+    @Binding var params: [String: JSONValue]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Parameters").font(.subheadline).bold()
+            Text("Leave `target_sum` blank to use Scanpy’s default.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            LabeledContent("target_sum") {
+                TextField("", text: bindingString("target_sum"))
+                    .frame(width: 220)
+            }
+        }
+    }
+
+    private func bindingString(_ key: String) -> Binding<String> {
+        Binding<String>(
+            get: { params[key]?.stringValue ?? "" },
+            set: { params[key] = .string($0) }
         )
     }
 }

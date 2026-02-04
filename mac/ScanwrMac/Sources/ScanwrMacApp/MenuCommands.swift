@@ -35,32 +35,34 @@ struct MenuCommands: Commands {
                 model.closeProject()
             }
             .disabled(!model.hasProject)
-        }
 
-        CommandMenu("Templates") {
-            Button("Import Template…") {
-                if let url = pickFile(title: "Import template", allowedExtensions: ["json"]) {
-                    model.importTemplate(from: url)
+            Divider()
+            Menu("Templates") {
+                Button("Import Template…") {
+                    if let url = pickFile(title: "Import template", allowedExtensions: ["json"]) {
+                        model.importTemplate(from: url)
+                    }
+                }
+                .disabled(!model.hasProject)
+                Button("Save Current as Template…") {
+                    if let url = saveFile(title: "Save template", defaultName: "template.json") {
+                        model.saveCurrentTemplate(to: url)
+                    }
+                }
+                .disabled(!model.hasProject || model.nodes.isEmpty)
+
+                Divider()
+
+                ForEach(model.availableTemplates, id: \.id) { t in
+                    Button("Apply: \(t.name)") {
+                        model.applyTemplate(t)
+                    }
+                }
+                if model.availableTemplates.isEmpty {
+                    Text("No templates found")
                 }
             }
             .disabled(!model.hasProject)
-            Button("Save Current as Template…") {
-                if let url = saveFile(title: "Save template", defaultName: "template.json") {
-                    model.saveCurrentTemplate(to: url)
-                }
-            }
-            .disabled(!model.hasProject || model.nodes.isEmpty)
-
-            Divider()
-
-            ForEach(model.availableTemplates, id: \.id) { t in
-                Button("Apply: \(t.name)") {
-                    model.applyTemplate(t)
-                }
-            }
-            if model.availableTemplates.isEmpty {
-                Text("No templates found")
-            }
         }
     }
 

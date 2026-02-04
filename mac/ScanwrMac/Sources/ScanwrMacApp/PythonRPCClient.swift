@@ -74,6 +74,7 @@ final class PythonRPCClient {
     }
 
     func start(
+        verbosity: Int,
         onLog: @escaping @Sendable (String) async -> Void,
         onProgress: @escaping @Sendable (ProgressEvent) async -> Void
     ) async throws {
@@ -99,6 +100,7 @@ final class PythonRPCClient {
         p.standardError = outPipe
         var env = ProcessInfo.processInfo.environment
         env["PYTHONUNBUFFERED"] = "1"
+        env["SCANWR_VERBOSITY"] = String(verbosity)
         if let cacheBase = Self.ensureStableCacheDir() {
             // Prevent matplotlib/fontconfig/numba from writing caches into unwritable locations.
             env.setdefault("MPLCONFIGDIR", cacheBase.appendingPathComponent("mpl").path)

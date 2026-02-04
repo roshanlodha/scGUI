@@ -39,6 +39,26 @@ def _notify_progress(
     sys.stdout.flush()
 
 
+def _configure_python_logging(verbosity: int) -> None:
+    try:
+        import logging
+
+        # Keep non-Scanpy libraries quiet by default. Scanpy verbosity controls Scanpy's chatter.
+        base = logging.WARNING if verbosity <= 3 else logging.INFO
+        logging.getLogger().setLevel(base)
+        for noisy in [
+            "numba",
+            "numba.core",
+            "numba.core.byteflow",
+            "h5py",
+            "anndata",
+            "matplotlib",
+            "fontTools",
+        ]:
+            logging.getLogger(noisy).setLevel(logging.WARNING)
+    except Exception:
+        pass
+
 def _is_10x_mtx_dir(path: Path) -> bool:
     required_any = {"matrix.mtx", "matrix.mtx.gz"}
     barcodes_any = {"barcodes.tsv", "barcodes.tsv.gz"}
@@ -173,6 +193,43 @@ def _run_module(adata, spec_id: str, params: Dict[str, Any]) -> None:
             return int(v)
         return int(v)
 
+    def _opt_float(key: str) -> Optional[float]:
+        v = (params or {}).get(key)
+        if v is None:
+            return None
+        if isinstance(v, (int, float)):
+            return float(v)
+        if isinstance(v, str):
+            if not v.strip():
+                return None
+            return float(v)
+        return float(v)
+
+    def _opt_str(key: str) -> Optional[str]:
+        v = (params or {}).get(key)
+        if v is None:
+            return None
+        if isinstance(v, str):
+            s = v.strip()
+            return s if s else None
+        return str(v).strip() or None
+
+    def _opt_bool(key: str, default: bool) -> bool:
+        v = (params or {}).get(key)
+        if v is None:
+            return default
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, (int, float)):
+            return bool(v)
+        if isinstance(v, str):
+            s = v.strip().lower()
+            if s in ("true", "1", "yes", "y", "t", "on"):
+                return True
+            if s in ("false", "0", "no", "n", "f", "off"):
+                return False
+        return bool(v)
+
     if spec_id == "scanpy.pp.filter_cells":
         # scanpy.pp.filter_cells allows only ONE of these thresholds per call.
         for key in ["min_counts", "min_genes", "max_counts", "max_genes"]:
@@ -191,38 +248,73 @@ def _run_module(adata, spec_id: str, params: Dict[str, Any]) -> None:
             sc.pp.filter_genes(adata, **{key: val}, inplace=True)
         return
 
-    if spec_id == "scanpy.pp.calculate_qc_metrics":
-        expr_type = str(params.get("expr_type", "counts") or "counts")
-        var_type = str(params.get("var_type", "genes") or "genes")
-        qc_vars = _parse_csv_list(str(params.get("qc_vars", "") or "")) or ()
-        percent_top = tuple(_parse_int_list(str(params.get("percent_top", "") or "")) or [50, 100, 200, 500])
-        layer_raw = str(params.get("layer", "") or "")
-        layer = layer_raw if layer_raw else None
-        use_raw = bool(params.get("use_raw", False))
-        inplace = bool(params.get("inplace", False))
-        log1p = bool(params.get("log1p", True))
-        parallel_raw = str(params.get("parallel", "") or "")
-        parallel = int(parallel_raw) if parallel_raw.strip() else None
+    if spec_id == "scanpy.pp.scrublet":
+        batch_key = _opt_str("batch_key")
+        sc.pp.scrublet(adata, batch_key=batch_key)
+        return
 
-        sc.pp.calculate_qc_metrics(
-            adata,
-            expr_type=expr_type,
-            var_type=var_type,
-            qc_vars=qc_vars,
-            percent_top=percent_top,
-            layer=layer,
-            use_raw=use_raw,
-            inplace=inplace,
-            log1p=log1p,
-            parallel=parallel,
-        )
+    if spec_id == "scanpy.pp.calculate_qc_metrics":
+        # Prefer the simplified, checkbox-driven interface (mt/ribo/hb). Fall back to
+        # advanced parameters if those aren't provided.
+        uses_gene_flags = any(k in (params or {}) for k in ("use_mt", "use_ribo", "use_hb"))
+        log1p = _opt_bool("log1p", True)
+
+        percent_top_list = _parse_int_list(str((params or {}).get("percent_top", "") or ""))
+        percent_top = tuple(percent_top_list) if percent_top_list else None
+
+        kwargs: Dict[str, Any] = {
+            "adata": adata,
+            "inplace": True,
+            "log1p": log1p,
+        }
+
+        if uses_gene_flags:
+            qc_vars: List[str] = []
+            if _opt_bool("use_mt", True):
+                adata.var["mt"] = adata.var_names.str.startswith("MT-")
+                qc_vars.append("mt")
+            if _opt_bool("use_ribo", True):
+                adata.var["ribo"] = adata.var_names.str.startswith(("RPS", "RPL"))
+                qc_vars.append("ribo")
+            if _opt_bool("use_hb", True):
+                adata.var["hb"] = adata.var_names.str.contains(r"^HB[^(P)]", regex=True, na=False)
+                qc_vars.append("hb")
+            kwargs["qc_vars"] = qc_vars
+        else:
+            # Advanced mode (legacy): pass through Scanpy arguments.
+            kwargs["expr_type"] = str((params or {}).get("expr_type", "counts") or "counts")
+            kwargs["var_type"] = str((params or {}).get("var_type", "genes") or "genes")
+            kwargs["qc_vars"] = _parse_csv_list(str((params or {}).get("qc_vars", "") or "")) or ()
+            layer = _opt_str("layer")
+            if layer is not None:
+                kwargs["layer"] = layer
+            kwargs["use_raw"] = _opt_bool("use_raw", False)
+            parallel = _opt_int("parallel")
+            if parallel is not None:
+                kwargs["parallel"] = parallel
+
+        if percent_top is not None:
+            kwargs["percent_top"] = percent_top
+
+        sc.pp.calculate_qc_metrics(**kwargs)
+        return
+
+    if spec_id == "scanpy.pp.normalize_total":
+        target_sum = _opt_float("target_sum")
+        if target_sum is None:
+            sc.pp.normalize_total(adata)
+        else:
+            sc.pp.normalize_total(adata, target_sum=target_sum)
+        return
+
+    if spec_id == "scanpy.pp.log1p":
+        sc.pp.log1p(adata)
         return
 
     raise NotImplementedError(spec_id)
 
 
 def list_modules() -> List[Dict[str, Any]]:
-    # For the next version, expose only these two preprocessing filters for focused testing.
     return [
         {
             "id": "scanpy.pp.filter_cells",
@@ -237,6 +329,34 @@ def list_modules() -> List[Dict[str, Any]]:
             "namespace": "core",
             "title": "Filter Genes",
             "scanpyQualname": "scanpy.pp.filter_genes",
+        },
+        {
+            "id": "scanpy.pp.calculate_qc_metrics",
+            "group": "pp",
+            "namespace": "core",
+            "title": "Calculate QC Metrics",
+            "scanpyQualname": "scanpy.pp.calculate_qc_metrics",
+        },
+        {
+            "id": "scanpy.pp.scrublet",
+            "group": "pp",
+            "namespace": "core",
+            "title": "Scrublet (Doublet Detection)",
+            "scanpyQualname": "scanpy.pp.scrublet",
+        },
+        {
+            "id": "scanpy.pp.normalize_total",
+            "group": "pp",
+            "namespace": "core",
+            "title": "Normalize Total Counts",
+            "scanpyQualname": "scanpy.pp.normalize_total",
+        },
+        {
+            "id": "scanpy.pp.log1p",
+            "group": "pp",
+            "namespace": "core",
+            "title": "Log1p",
+            "scanpyQualname": "scanpy.pp.log1p",
         },
     ]
 
@@ -456,6 +576,18 @@ def _handle(method: str, params: Any) -> Any:
         return {"ok": True}
     if method == "list_modules":
         return list_modules()
+    if method == "set_verbosity":
+        try:
+            import scanpy as sc
+
+            level = int(params.get("level", 3))
+            level = max(0, min(4, level))
+            sc.settings.verbosity = level
+            _configure_python_logging(level)
+            _notify_log(f"scanpy verbosity={sc.settings.verbosity}")
+            return {"ok": True}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
     if method == "detect_reader":
         return detect_reader(path=params["path"])
     if method == "run_pipeline":
@@ -478,7 +610,8 @@ def main() -> int:
     try:
         import logging
 
-        logging.basicConfig(level=logging.DEBUG)
+        # Default to a conservative log level; Scanpy's own verbosity controls its output.
+        logging.basicConfig(level=logging.WARNING)
     except Exception:
         pass
 
@@ -486,9 +619,15 @@ def main() -> int:
     try:
         import scanpy as sc
 
-        sc.settings.verbosity = 4
+        v_raw = os.environ.get("SCANWR_VERBOSITY", "3")
+        try:
+            v = int(v_raw)
+        except Exception:
+            v = 3
+        sc.settings.verbosity = max(0, min(4, v))
         # Force logging to stdout so it shows up in the app console.
         sc.settings.logfile = sys.stdout
+        _configure_python_logging(sc.settings.verbosity)
         _notify_log(f"scanpy verbosity={sc.settings.verbosity}")
     except Exception as e:
         _notify_log(f"scanpy verbosity setup failed: {e}")

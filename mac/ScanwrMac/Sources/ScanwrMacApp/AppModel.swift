@@ -33,10 +33,15 @@ final class AppModel: ObservableObject {
     @Published var progressPercent: Double = 0
     @Published var progressMessage: String = ""
 
+    // App settings
+    @Published var verbosity: Int = 3
+
     private let rpc = PythonRPCClient()
     private var workflowSaveWorkItem: DispatchWorkItem?
+    private var runTask: Task<Void, Never>?
 
     init() {
+        loadAppSettings()
         Task { await loadModules() }
     }
 
@@ -69,6 +74,7 @@ final class AppModel: ObservableObject {
         if rpc.isRunning { return }
         do {
             try await rpc.start(
+                verbosity: verbosity,
                 onLog: { [weak self] msg in
                     await self?.appendLog(msg)
                 },
@@ -79,6 +85,33 @@ final class AppModel: ObservableObject {
             appendLog("Backend: started")
         } catch {
             appendLog("Backend ERROR: \(error)")
+        }
+    }
+
+    private func loadAppSettings() {
+        if let v = UserDefaults.standard.object(forKey: "scgui.verbosity") as? Int {
+            verbosity = max(0, min(4, v))
+        } else {
+            verbosity = 3
+        }
+    }
+
+    func setVerbosity(_ level: Int) {
+        let clamped = max(0, min(4, level))
+        verbosity = clamped
+        UserDefaults.standard.set(clamped, forKey: "scgui.verbosity")
+        Task {
+            await ensureBackendStarted()
+            do {
+                struct Params: Codable { var level: Int }
+                struct Res: Codable { var ok: Bool }
+                let res: Res = try await rpc.call(method: "set_verbosity", params: Params(level: clamped))
+                if res.ok {
+                    appendLog("Verbosity set to \(clamped)")
+                }
+            } catch {
+                appendLog("set_verbosity ERROR: \(error)")
+            }
         }
     }
 
@@ -277,8 +310,22 @@ final class AppModel: ObservableObject {
 
     func defaultParams(for specId: String) -> [String: JSONValue] {
         switch specId {
-        case "scanpy.pp.filter_cells", "scanpy.pp.filter_genes":
-            return [:]
+        case "scanpy.pp.filter_cells":
+            return ["min_genes": .number(100)]
+        case "scanpy.pp.filter_genes":
+            return ["min_cells": .number(3)]
+        case "scanpy.pp.scrublet":
+            return ["batch_key": .string("sample")]
+        case "scanpy.pp.calculate_qc_metrics":
+            return [
+                "use_mt": .bool(true),
+                "use_ribo": .bool(true),
+                "use_hb": .bool(true),
+                "percent_top": .string(""),
+                "log1p": .bool(true),
+            ]
+        case "scanpy.pp.normalize_total":
+            return ["target_sum": .string("")]
         default:
             return [:]
         }
@@ -289,8 +336,18 @@ final class AppModel: ObservableObject {
     }
 
     func nodeBinding(id: UUID) -> Binding<PipelineNode>? {
-        guard let idx = nodes.firstIndex(where: { $0.id == id }) else { return nil }
-        return Binding(get: { self.nodes[idx] }, set: { self.nodes[idx] = $0 })
+        guard nodes.contains(where: { $0.id == id }) else { return nil }
+        return Binding(
+            get: {
+                self.nodes.first(where: { $0.id == id })
+                    ?? PipelineNode(specId: "", position: CGPointCodable(.zero), params: [:])
+            },
+            set: { updated in
+                if let idx = self.nodes.firstIndex(where: { $0.id == id }) {
+                    self.nodes[idx] = updated
+                }
+            }
+        )
     }
 
     func addLink(from: UUID, to: UUID) {
@@ -479,20 +536,45 @@ final class AppModel: ObservableObject {
         }
 
         do {
+            if Task.isCancelled { throw CancellationError() }
             let steps = ordered.map { PipelineStep(specId: $0.specId, params: $0.params) }
             let summary: PipelineRunSummary = try await rpc.call(
                 method: "run_pipeline",
                 params: RunParams(outputDir: outDir, projectName: projName, samples: samples, steps: steps)
             )
+            if Task.isCancelled { throw CancellationError() }
             appendLog("OK: wrote outputs to \(summary.outputDir)")
             for r in summary.results {
                 appendLog("OK: \(r.sample) via \(r.reader) final=\(r.finalPath) shape=\(r.shape)")
             }
             progressPercent = 1
             progressMessage = "Done."
+        } catch is CancellationError {
+            appendLog("Stopped.")
+            progressMessage = "Stopped."
         } catch {
             appendLog("run_pipeline ERROR: \(error)")
         }
+    }
+
+    func startRun() {
+        guard runTask == nil else { return }
+        runTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.runPipeline()
+            self.runTask = nil
+        }
+    }
+
+    func stopRun() async {
+        guard isRunning else { return }
+        appendLog("Stopping…")
+        runTask?.cancel()
+        runTask = nil
+        await rpc.stop()
+        isRunning = false
+        progressMessage = "Stopped."
+        progressPercent = 0
     }
 
     // Topological ordering for a simple DAG. For now we enforce a linear chain.
