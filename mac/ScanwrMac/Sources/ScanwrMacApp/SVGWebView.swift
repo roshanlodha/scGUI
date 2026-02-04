@@ -16,11 +16,33 @@ struct SVGWebView: NSViewRepresentable {
             nsView.loadHTMLString("", baseURL: nil)
             return
         }
-        nsView.loadFileURL(fileURL, allowingReadAccessTo: fileURL.deletingLastPathComponent())
+        if let svg = try? String(contentsOf: fileURL) {
+            let html = """
+            <!doctype html>
+            <html>
+              <head>
+                <meta charset="utf-8" />
+                <meta name="viewport" content="width=device-width, initial-scale=1" />
+                <style>
+                  html, body { margin: 0; width: 100%; height: 100%; background: transparent; }
+                  .wrap { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
+                  svg { width: 100% !important; height: 100% !important; }
+                </style>
+              </head>
+              <body>
+                <div class="wrap">
+                  \(svg)
+                </div>
+              </body>
+            </html>
+            """
+            nsView.loadHTMLString(html, baseURL: fileURL.deletingLastPathComponent())
+        } else {
+            nsView.loadFileURL(fileURL, allowingReadAccessTo: fileURL.deletingLastPathComponent())
+        }
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     final class Coordinator: NSObject, WKNavigationDelegate {}
 }
-

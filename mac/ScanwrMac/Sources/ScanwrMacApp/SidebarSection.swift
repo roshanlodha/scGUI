@@ -2,8 +2,8 @@ import Foundation
 
 enum SidebarSection: String, CaseIterable, Identifiable {
     case metadata = "Metadata"
-    case visualization = "Visualization"
     case pipelineBuilder = "Pipeline Builder"
+    case visualization = "Visualization"
     case cohortAnalysis = "Cohort Analysis"
 
     var id: String { rawValue }
@@ -21,4 +21,3 @@ enum SidebarSection: String, CaseIterable, Identifiable {
         }
     }
 }
-

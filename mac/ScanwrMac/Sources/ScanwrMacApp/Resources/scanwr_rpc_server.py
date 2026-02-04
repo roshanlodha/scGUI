@@ -89,11 +89,19 @@ def inspect_h5ad(path: str, var_names_limit: int = 5000) -> Dict[str, Any]:
         obs_cols = []
 
     groupby_candidates: List[str] = []
+    numeric_candidates: List[str] = []
     try:
+        import pandas as pd  # type: ignore
+
         obs = adata.obs
         for k in obs_cols:
             try:
                 s = obs[k]
+                try:
+                    if pd.api.types.is_numeric_dtype(s) and not pd.api.types.is_bool_dtype(s):
+                        numeric_candidates.append(k)
+                except Exception:
+                    pass
                 if str(getattr(s.dtype, "name", "")) == "category":
                     groupby_candidates.append(k)
                     continue
@@ -136,6 +144,7 @@ def inspect_h5ad(path: str, var_names_limit: int = 5000) -> Dict[str, Any]:
         "nVars": n_vars,
         "obsColumns": sorted(map(str, obs_cols)),
         "groupbyCandidates": sorted(set(map(str, groupby_candidates))),
+        "numericObsColumns": sorted(set(map(str, numeric_candidates))),
         "varNames": list(map(str, var_names)),
         "varNamesTotal": int(total),
         "varNamesTruncated": bool(truncated),
@@ -263,6 +272,298 @@ def plot_violin(params: Dict[str, Any]) -> Dict[str, Any]:
     fig.savefig(str(out), format="svg", bbox_inches="tight")
     plt.close(fig)
 
+    return {"svgPath": str(out)}
+
+
+def _parse_keyref(keyref: str) -> Tuple[str, str]:
+    s = str(keyref or "").strip()
+    if ":" not in s:
+        raise ValueError(f"Invalid key reference (expected obs:<col> or gene:<name>): {s}")
+    kind, name = s.split(":", 1)
+    kind = kind.strip().lower()
+    name = name.strip()
+    if kind not in ("obs", "gene") or not name:
+        raise ValueError(f"Invalid key reference: {s}")
+    return kind, name
+
+
+def _vector_from_keyref(adata: Any, keyref: str, layer: str | None, use_raw: bool | None) -> Any:
+    import numpy as np
+
+    kind, name = _parse_keyref(keyref)
+    if kind == "obs":
+        try:
+            return adata.obs[name].to_numpy()
+        except Exception:
+            return adata.obs[name].values
+
+    # gene
+    view = adata
+    if use_raw:
+        raw = getattr(adata, "raw", None)
+        if raw is not None:
+            view = raw
+
+    if layer:
+        layers = getattr(adata, "layers", {})
+        if layer not in layers:
+            raise ValueError(f"Layer not found: {layer}")
+        X = adata[:, name].layers[layer]
+    else:
+        X = view[:, name].X
+
+    try:
+        # sparse
+        if hasattr(X, "toarray"):
+            X = X.toarray()
+    except Exception:
+        pass
+
+    arr = np.asarray(X)
+    if arr.ndim == 2 and arr.shape[1] == 1:
+        arr = arr[:, 0]
+    return arr
+
+
+def plot_custom(params: Dict[str, Any]) -> Dict[str, Any]:
+    import scanpy as sc  # local import after env set
+    import matplotlib as mpl
+    import matplotlib.pyplot as plt
+
+    # Optional seaborn (preferred)
+    sns = None
+    try:
+        import seaborn as seaborn  # type: ignore
+
+        sns = seaborn
+    except Exception:
+        sns = None
+
+    h5ad_path = str(params.get("h5adPath") or "").strip()
+    if not h5ad_path:
+        raise ValueError("Missing h5adPath")
+    p = Path(h5ad_path).expanduser().resolve()
+    if not p.exists():
+        raise FileNotFoundError(str(p))
+
+    plot_type = str(params.get("plotType") or "").strip().lower()
+    if plot_type not in ("scatter", "violin", "box", "density"):
+        raise ValueError(f"Unsupported plotType: {plot_type}")
+
+    output_path = str(params.get("outputPath") or "").strip()
+    if not output_path:
+        raise ValueError("Missing outputPath")
+    out = Path(output_path).expanduser().resolve()
+    if out.suffix.lower() != ".svg":
+        out = out.with_suffix(".svg")
+    out.parent.mkdir(parents=True, exist_ok=True)
+
+    # Keep SVG text editable
+    mpl.rcParams.update({"text.usetex": False, "svg.fonttype": "none"})
+
+    _notify_log(f"Plot: loading {p.name}…")
+    adata = sc.read_h5ad(str(p))
+
+    layer = str(params.get("layer") or "").strip() or None
+    use_raw = params.get("useRaw")
+    if use_raw is not None:
+        use_raw = bool(use_raw)
+
+    xref = params.get("x")
+    yref = params.get("y")
+    cref = params.get("color")
+
+    title = str(params.get("title") or "").strip()
+    subtitle = str(params.get("subtitle") or "").strip()
+    legend_title = str(params.get("legendTitle") or "").strip()
+    xlabel = str(params.get("xLabel") or "").strip()
+    ylabel = str(params.get("yLabel") or "").strip()
+    xrot = params.get("xTickRotation")
+    try:
+        xrot_f = float(xrot) if xrot is not None else None
+    except Exception:
+        xrot_f = None
+
+    point_size = params.get("pointSize")
+    alpha = params.get("alpha")
+    try:
+        point_size_f = float(point_size) if point_size is not None else None
+    except Exception:
+        point_size_f = None
+    try:
+        alpha_f = float(alpha) if alpha is not None else None
+    except Exception:
+        alpha_f = None
+
+    def _default_label(keyref: Any) -> str:
+        if not keyref:
+            return ""
+        kind, name = _parse_keyref(str(keyref))
+        return name if kind == "obs" else f"{name} (expr)"
+
+    if not xlabel:
+        xlabel = _default_label(xref)
+    if not ylabel:
+        ylabel = _default_label(yref)
+
+    import pandas as pd
+    import numpy as np
+
+    df = pd.DataFrame(index=getattr(adata, "obs_names", None))
+    if xref:
+        df["x"] = _vector_from_keyref(adata, str(xref), layer=layer, use_raw=use_raw)
+    if yref:
+        df["y"] = _vector_from_keyref(adata, str(yref), layer=layer, use_raw=use_raw)
+    if cref:
+        df["c"] = _vector_from_keyref(adata, str(cref), layer=layer, use_raw=use_raw)
+
+    # Drop rows with missing values in required columns.
+    required_cols: List[str] = []
+    if plot_type in ("scatter",):
+        required_cols = ["x", "y"]
+    if plot_type in ("violin", "box", "density"):
+        required_cols = ["y"]
+    df = df.dropna(subset=required_cols)
+
+    if plot_type == "scatter":
+        if "x" not in df.columns or "y" not in df.columns:
+            raise ValueError("Scatter plot requires x and y.")
+
+        fig, ax = plt.subplots(figsize=(7.4, 5.2), dpi=120)
+        if "c" in df.columns:
+            cvals = df["c"].to_numpy()
+            # heuristic: treat as continuous if numeric with many unique values
+            is_numeric = np.issubdtype(cvals.dtype, np.number)
+            nunique = int(pd.Series(cvals).nunique(dropna=True))
+            if is_numeric and nunique > 30:
+                sca = ax.scatter(
+                    df["x"].to_numpy(),
+                    df["y"].to_numpy(),
+                    c=cvals,
+                    s=point_size_f or 10,
+                    alpha=alpha_f if alpha_f is not None else 0.8,
+                    cmap="viridis",
+                    linewidths=0,
+                )
+                cb = fig.colorbar(sca, ax=ax, fraction=0.05, pad=0.04)
+                cb.set_label(legend_title or _default_label(cref))
+            else:
+                if sns is None:
+                    # matplotlib fallback (categorical)
+                    cats = pd.Series(cvals).astype(str)
+                    uniq = list(dict.fromkeys(cats.tolist()))
+                    palette = plt.get_cmap("tab20")
+                    for i, u in enumerate(uniq):
+                        mask = cats == u
+                        ax.scatter(
+                            df.loc[mask, "x"].to_numpy(),
+                            df.loc[mask, "y"].to_numpy(),
+                            s=point_size_f or 10,
+                            alpha=alpha_f if alpha_f is not None else 0.8,
+                            label=u,
+                            color=palette(i % 20),
+                            linewidths=0,
+                        )
+                    ax.legend(title=legend_title or _default_label(cref), loc="best", frameon=False)
+                else:
+                    sns.scatterplot(
+                        data=df,
+                        x="x",
+                        y="y",
+                        hue="c",
+                        ax=ax,
+                        s=point_size_f or 30,
+                        alpha=alpha_f if alpha_f is not None else 0.8,
+                        linewidth=0,
+                    )
+                    leg = ax.get_legend()
+                    if leg is not None:
+                        leg.set_title(legend_title or _default_label(cref))
+        else:
+            ax.scatter(
+                df["x"].to_numpy(),
+                df["y"].to_numpy(),
+                s=point_size_f or 10,
+                alpha=alpha_f if alpha_f is not None else 0.8,
+                linewidths=0,
+            )
+
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel(ylabel)
+        ax.grid(True, alpha=0.18)
+
+    if plot_type in ("violin", "box"):
+        if "y" not in df.columns:
+            raise ValueError(f"{plot_type} plot requires y.")
+
+        fig, ax = plt.subplots(figsize=(7.4, 5.2), dpi=120)
+        if sns is None:
+            raise RuntimeError("seaborn is required for violin/box plots (not installed in runtime).")
+
+        has_x = "x" in df.columns
+        hue = "c" if "c" in df.columns else None
+        if not has_x and hue is not None:
+            # Seaborn's behavior with only y+hue is a bit inconsistent; keep it simple for now.
+            _notify_log("Note: ignoring color because x/category is not set.")
+            hue = None
+
+        if plot_type == "violin":
+            if has_x:
+                sns.violinplot(data=df, x="x", y="y", hue=hue, ax=ax, cut=0, inner="quart")
+            else:
+                sns.violinplot(data=df, y="y", ax=ax, cut=0, inner="quart")
+        else:
+            if has_x:
+                sns.boxplot(data=df, x="x", y="y", hue=hue, ax=ax)
+            else:
+                sns.boxplot(data=df, y="y", ax=ax)
+
+        if hue is not None:
+            leg = ax.get_legend()
+            if leg is not None:
+                leg.set_title(legend_title or _default_label(cref))
+        else:
+            try:
+                ax.get_legend().remove()
+            except Exception:
+                pass
+
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel(ylabel)
+
+    if plot_type == "density":
+        if "y" not in df.columns:
+            raise ValueError("Density plot requires a value (y).")
+        fig, ax = plt.subplots(figsize=(7.4, 5.2), dpi=120)
+        if sns is None:
+            raise RuntimeError("seaborn is required for density plots (not installed in runtime).")
+
+        fill = bool(params.get("densityFill")) if params.get("densityFill") is not None else False
+
+        if "x" in df.columns:
+            sns.kdeplot(data=df, x="y", hue="x", ax=ax, common_norm=False, fill=fill)
+            leg = ax.get_legend()
+            if leg is not None:
+                leg.set_title(legend_title or _default_label(xref))
+        else:
+            sns.kdeplot(data=df, x="y", ax=ax, fill=fill)
+
+        ax.set_xlabel(xlabel or _default_label(yref))
+        ax.set_ylabel(ylabel or "Density")
+        ax.grid(True, alpha=0.18)
+
+    if title:
+        fig.suptitle(title, y=0.985, fontsize=14, fontweight="bold")
+    if subtitle:
+        fig.text(0.5, 0.945 if title else 0.98, subtitle, ha="center", va="top", fontsize=10, color="#666666")
+
+    if xrot_f is not None:
+        plt.setp(ax.get_xticklabels(), rotation=xrot_f, ha="right")
+
+    fig.tight_layout()
+    _notify_log(f"Saving SVG: {out.name}")
+    fig.savefig(str(out), format="svg", bbox_inches="tight")
+    plt.close(fig)
     return {"svgPath": str(out)}
 
 def _is_10x_mtx_dir(path: Path) -> bool:
@@ -801,6 +1102,8 @@ def _handle(method: str, params: Any) -> Any:
         return inspect_h5ad(path=params["path"], var_names_limit=limit)
     if method == "plot_violin":
         return plot_violin(params=params)
+    if method == "plot_custom":
+        return plot_custom(params=params)
     if method == "run_pipeline":
         # New API: per-sample raw input paths
         if "samples" in params:

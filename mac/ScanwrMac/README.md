@@ -21,7 +21,7 @@ SCANWR_PYTHON=/Users/roshanlodha/Documents/scanwr/venv/bin/python swift run Scan
 
 The app bundle id is `com.roshanlodha.scanwr`.
 
-Current release version: `0.1.1`
+Current release version: `0.1.2`
 
 ### 1) Provide a relocatable Python runtime
 
@@ -78,4 +78,4 @@ cd mac/ScanwrMac
 ./scripts/make_dmg.sh
 ```
 
-Outputs land in `mac/ScanwrMac/dist/` (e.g. `scGUI-0.1.1.dmg`).
+Outputs land in `mac/ScanwrMac/dist/` (e.g. `scGUI-0.1.2.dmg`).

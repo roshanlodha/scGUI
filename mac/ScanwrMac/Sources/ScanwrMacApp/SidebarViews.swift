@@ -8,25 +8,10 @@ struct Sidebar: View {
             Label(s.rawValue, systemImage: s.systemImage)
                 .tag(s)
         }
-        .navigationTitle("scanwr")
+        .navigationTitle("scGUI")
         .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
+        .panelChrome()
+        .padding(10)
     }
 }
-
-struct Detail: View {
-    var section: SidebarSection
-
-    var body: some View {
-        switch section {
-        case .metadata:
-            MetadataView()
-        case .visualization:
-            VisualizationView()
-        case .pipelineBuilder:
-            CanvasView()
-        case .cohortAnalysis:
-            CohortAnalysisView()
-        }
-    }
-}
-

@@ -124,6 +124,7 @@ struct AdataInspectResult: Codable, Hashable {
     var nVars: Int
     var obsColumns: [String]
     var groupbyCandidates: [String]
+    var numericObsColumns: [String]
     var varNames: [String]
     var varNamesTotal: Int
     var varNamesTruncated: Bool
@@ -154,5 +155,45 @@ struct ViolinPlotRequest: Codable, Hashable {
 }
 
 struct ViolinPlotResult: Codable, Hashable {
+    var svgPath: String
+}
+
+struct CustomPlotRequest: Codable, Hashable {
+    // h5ad at .scanwr/checkpoints/<sample>.h5ad
+    var h5adPath: String
+    // "scatter" | "violin" | "box"
+    var plotType: String
+
+    // Key references are encoded strings:
+    // - "obs:<column>"
+    // - "gene:<var_name>"
+    var x: String?
+    var y: String?
+    var color: String?
+
+    // Expression source
+    var layer: String?
+    var useRaw: Bool?
+
+    // Generic styling
+    var title: String
+    var subtitle: String
+    var legendTitle: String
+    var xLabel: String
+    var yLabel: String
+    var xTickRotation: Double?
+
+    // Scatter-specific
+    var pointSize: Double?
+    var alpha: Double?
+
+    // Density-specific
+    var densityFill: Bool?
+
+    // Output
+    var outputPath: String
+}
+
+struct CustomPlotResult: Codable, Hashable {
     var svgPath: String
 }

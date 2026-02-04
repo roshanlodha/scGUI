@@ -211,6 +211,11 @@ final class AppModel: ObservableObject {
         return try await rpc.call(method: "plot_violin", params: req)
     }
 
+    func plotCustom(req: CustomPlotRequest) async throws -> CustomPlotResult {
+        await ensureBackendStarted()
+        return try await rpc.call(method: "plot_custom", params: req)
+    }
+
     // MARK: Project open/create/close + recents
 
     func loadRecents() {

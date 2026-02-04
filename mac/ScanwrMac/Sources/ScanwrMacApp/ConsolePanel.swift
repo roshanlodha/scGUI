@@ -38,7 +38,6 @@ struct ConsolePanel: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(.ultraThinMaterial)
+        .panelChrome()
     }
 }
-
