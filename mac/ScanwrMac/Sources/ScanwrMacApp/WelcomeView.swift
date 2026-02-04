@@ -6,8 +6,7 @@ struct WelcomeView: View {
 
     @State private var showOpenPicker = false
     @State private var showCreatePicker = false
-    @State private var newProjectName: String = ""
-    @State private var createBaseDir: URL?
+    @State private var createProjectDir: URL?
     @State private var showClearCacheConfirm: Bool = false
     @State private var showSettings: Bool = false
 
@@ -81,23 +80,19 @@ struct WelcomeView: View {
                     Text("This clears cached files (matplotlib/fontconfig/numba) and restarts the backend.")
                 }
 
-                if let base = createBaseDir {
+                if let dir = createProjectDir {
                     VStack(alignment: .leading, spacing: 10) {
-                        Text("Create project in:")
+                        Text("Initialize project in:")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        Text(base.path)
+                        Text(dir.path)
                             .font(.caption)
                             .lineLimit(1)
                             .truncationMode(.middle)
 
-                        HStack(spacing: 10) {
-                            TextField("Project name", text: $newProjectName)
-                                .frame(width: 280)
-                            Button("Create") {
-                                model.createProject(baseDir: base, name: newProjectName)
-                            }
-                            .disabled(newProjectName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        Button("Create") {
+                            model.createProject(at: dir)
+                            createProjectDir = nil
                         }
                     }
                     .padding(12)
@@ -163,8 +158,7 @@ struct WelcomeView: View {
             allowsMultipleSelection: false
         ) { result in
             if case .success(let urls) = result, let url = urls.first {
-                createBaseDir = url
-                newProjectName = ""
+                createProjectDir = url
             }
         }
     }

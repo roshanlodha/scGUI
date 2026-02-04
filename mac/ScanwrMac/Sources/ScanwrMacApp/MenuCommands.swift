@@ -8,10 +8,8 @@ struct MenuCommands: Commands {
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
             Button("New Project…") {
-                if let base = pickDirectory(title: "Choose where to create the project") {
-                    if let name = promptForText(title: "New Project", message: "Project name:", defaultValue: "scgui-project") {
-                        model.createProject(baseDir: base, name: name)
-                    }
+                if let dir = pickDirectory(title: "Choose a folder to use as the project") {
+                    model.createProject(at: dir)
                 }
             }
             .keyboardShortcut("n", modifiers: [.command])
@@ -91,17 +89,5 @@ struct MenuCommands: Commands {
         panel.nameFieldStringValue = defaultName
         panel.allowedContentTypes = [UTType.json]
         return panel.runModal() == .OK ? panel.url : nil
-    }
-
-    private func promptForText(title: String, message: String, defaultValue: String) -> String? {
-        let alert = NSAlert()
-        alert.messageText = title
-        alert.informativeText = message
-        let field = NSTextField(string: defaultValue)
-        field.frame = NSRect(x: 0, y: 0, width: 320, height: 24)
-        alert.accessoryView = field
-        alert.addButton(withTitle: "OK")
-        alert.addButton(withTitle: "Cancel")
-        return alert.runModal() == .alertFirstButtonReturn ? field.stringValue : nil
     }
 }

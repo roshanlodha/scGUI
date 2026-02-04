@@ -121,6 +121,7 @@ struct ModulePaletteSidebar: View {
 }
 
 private struct ModuleRow: View {
+    @EnvironmentObject private var model: AppModel
     var spec: ModuleSpec
 
     var body: some View {
@@ -152,9 +153,12 @@ private struct ModuleRow: View {
         }
         .contentShape(Rectangle())
         .listRowBackground(Color.clear)
+        .onTapGesture(count: 2) {
+            model.addNodeAndAutoLink(spec: spec)
+        }
         .onDrag {
             NSItemProvider(object: spec.id as NSString)
         }
-        .help("Drag onto the canvas to add")
+        .help("Drag onto the canvas to add, or double-click to append")
     }
 }

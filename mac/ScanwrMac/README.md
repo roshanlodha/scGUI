@@ -9,7 +9,7 @@ scGUI, formerly scAnWr, is a native SwiftUI macOS front-end that talks to a Pyth
 
 ## Run (development)
 
-1. Ensure your Python env has `scanpy` installed (your repo `venv/` already does).
+1. Ensure your Python env has `scanpy` installed (your repo `venv/` already does). If available, also install `rapids_singlecell` for GPU acceleration (Scanwr falls back to Scanpy if RAPIDS SingleCell isn't available).
 2. Build/run with an env var pointing at that Python:
 
 ```bash
@@ -21,9 +21,9 @@ SCANWR_PYTHON=/Users/roshanlodha/Documents/scanwr/venv/bin/python swift run Scan
 
 The app bundle id is `com.roshanlodha.scanwr`.
 
-Current release version: `0.1.4`
+Current release version: `0.2.0`
 
-Note: Leiden clustering (`scanpy.tl.leiden`) requires optional Python deps `leidenalg` + `igraph`.
+Note: Leiden clustering (e.g. `rapids_singlecell.tl.leiden`, or Scanpy fallback) may require optional Python deps `leidenalg` + `igraph`.
 The embedded runtime build script installs these automatically; if you maintain your own `venv/`,
 ensure they are installed there too.
 
@@ -33,7 +33,7 @@ You must provide a self-contained Python runtime directory with:
 
 - `bin/python3`
 - its adjacent `lib/` (or framework) so it runs without Homebrew/Python.org installs
-- `site-packages` containing `scanpy` and all dependencies
+- `site-packages` containing `scanpy` and all dependencies (optionally `rapids_singlecell` for GPU acceleration)
 
 Set it as:
 
@@ -82,4 +82,4 @@ cd mac/ScanwrMac
 ./scripts/make_dmg.sh
 ```
 
-Outputs land in `mac/ScanwrMac/dist/` (e.g. `scGUI-0.1.4.dmg`).
+Outputs land in `mac/ScanwrMac/dist/` (e.g. `scGUI-0.2.0.dmg`).

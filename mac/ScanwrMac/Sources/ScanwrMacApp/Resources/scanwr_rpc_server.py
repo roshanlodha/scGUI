@@ -1081,8 +1081,12 @@ def run_pipeline_multi(output_dir: str, project_name: str, samples: List[Dict[st
     out_dir = Path(output_dir).expanduser().resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    project = out_dir / _sanitize_filename(project_name)
-    project.mkdir(parents=True, exist_ok=True)
+    project_name = str(project_name or "").strip()
+    if project_name:
+        project = out_dir / _sanitize_filename(project_name)
+        project.mkdir(parents=True, exist_ok=True)
+    else:
+        project = out_dir
     scanwr_dir = project / ".scanwr"
     scanwr_dir.mkdir(parents=True, exist_ok=True)
     checkpoints_dir = scanwr_dir / "checkpoints"
@@ -1248,7 +1252,7 @@ def _handle(method: str, params: Any) -> Any:
         if "samples" in params:
             return run_pipeline_multi(
                 output_dir=params["outputDir"],
-                project_name=params.get("projectName") or "scanwr-project",
+                project_name=params.get("projectName", ""),
                 samples=params["samples"],
                 steps=params["steps"],
             )

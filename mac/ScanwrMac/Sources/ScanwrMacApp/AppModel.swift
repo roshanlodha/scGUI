@@ -3,6 +3,10 @@ import SwiftUI
 
 @MainActor
 final class AppModel: ObservableObject {
+    nonisolated static let canvasGridSpacing: CGFloat = 18
+    nonisolated static let canvasNodeSize = CGSize(width: 260, height: 46)
+    nonisolated static let canvasPortInsetX: CGFloat = 14
+
     @Published var availableModules: [ModuleSpec] = []
     @Published var isLoadingModules: Bool = false
     @Published var moduleLoadError: String? = nil
@@ -15,6 +19,8 @@ final class AppModel: ObservableObject {
         didSet { schedulePersistCurrentWorkflow() }
     }
     @Published var selectedNodeId: UUID?
+    @Published var lastAddedNodeId: UUID?
+    @Published var canvasVisibleRect: CGRect = .zero
 
     // Project + metadata
     @Published var samples: [SampleMetadata] = []
@@ -52,9 +58,8 @@ final class AppModel: ObservableObject {
 
     var projectPath: URL? {
         let base = outputDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
-        let name = projectName.trimmingCharacters(in: .whitespacesAndNewlines)
-        if base.isEmpty || name.isEmpty { return nil }
-        return URL(fileURLWithPath: base).appendingPathComponent(name)
+        if base.isEmpty { return nil }
+        return URL(fileURLWithPath: base)
     }
 
     static func sanitizeFilename(_ s: String) -> String {
@@ -247,7 +252,7 @@ final class AppModel: ObservableObject {
             return
         }
 
-        outputDirectory = projectURL.deletingLastPathComponent().path
+        outputDirectory = projectURL.path
         projectName = projectURL.lastPathComponent
         addRecent(projectURL.path)
 
@@ -264,11 +269,7 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func createProject(baseDir: URL, name: String) {
-        let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !clean.isEmpty else { return }
-
-        let projectURL = baseDir.appendingPathComponent(clean)
+    func createProject(at projectURL: URL) {
         let scanwrURL = projectURL.appendingPathComponent(".scanwr")
         let checkpointsURL = scanwrURL.appendingPathComponent("checkpoints")
         let historyURL = scanwrURL.appendingPathComponent("history")
@@ -289,8 +290,8 @@ final class AppModel: ObservableObject {
                 try Self.emptyCurrentWorkflow().write(to: currentTemplateURL, atomically: true, encoding: .utf8)
             }
 
-            outputDirectory = baseDir.path
-            projectName = clean
+            outputDirectory = projectURL.path
+            projectName = projectURL.lastPathComponent
             samples = []
             nodes = []
             links = []
@@ -337,25 +338,83 @@ final class AppModel: ObservableObject {
 
     // MARK: Canvas helpers
 
-    func addNode(spec: ModuleSpec, at position: CGPoint) {
+    @discardableResult
+    func addNode(spec: ModuleSpec, at position: CGPoint) -> UUID {
         let defaults = defaultParams(for: spec.id)
-        nodes.append(PipelineNode(specId: spec.id, position: CGPointCodable(position), params: defaults))
+        let node = PipelineNode(specId: spec.id, position: CGPointCodable(snapToCanvasGrid(position)), params: defaults)
+        nodes.append(node)
+        selectedNodeId = node.id
+        lastAddedNodeId = node.id
+        return node.id
+    }
+
+    private func snapToCanvasGrid(_ point: CGPoint) -> CGPoint {
+        let spacing = Self.canvasGridSpacing
+        let size = Self.canvasNodeSize
+        let topLeft = CGPoint(x: point.x - size.width / 2, y: point.y - size.height / 2)
+        let snappedTopLeft = CGPoint(
+            x: (topLeft.x / spacing).rounded() * spacing,
+            y: (topLeft.y / spacing).rounded() * spacing
+        )
+        return CGPoint(x: snappedTopLeft.x + size.width / 2, y: snappedTopLeft.y + size.height / 2)
+    }
+
+    func addNodeAndAutoLink(spec: ModuleSpec) {
+        let prior = lastAddedNodeId ?? selectedNodeId ?? nodes.last?.id
+        let base = prior.flatMap { id in nodes.first(where: { $0.id == id }) }?.position.cgPoint
+
+        let visible = (canvasVisibleRect.width > 10 && canvasVisibleRect.height > 10) ? canvasVisibleRect : nil
+        let margin = Self.canvasGridSpacing * 4
+        let stepX = Self.canvasNodeSize.width + Self.canvasGridSpacing * 6
+        let stepY = Self.canvasNodeSize.height + Self.canvasGridSpacing * 6
+
+        let defaultPos: CGPoint = {
+            if let v = visible {
+                return CGPoint(x: v.minX + margin + Self.canvasNodeSize.width / 2, y: v.minY + margin + Self.canvasNodeSize.height / 2)
+            }
+            return CGPoint(x: 220, y: 160)
+        }()
+
+        var proposed = CGPoint(
+            x: (base?.x ?? defaultPos.x) + (base == nil ? 0 : stepX),
+            y: base?.y ?? defaultPos.y
+        )
+
+        if let v = visible {
+            let minX = v.minX + margin + Self.canvasNodeSize.width / 2
+            let maxX = v.maxX - margin - Self.canvasNodeSize.width / 2
+            let minY = v.minY + margin + Self.canvasNodeSize.height / 2
+            let maxY = v.maxY - margin - Self.canvasNodeSize.height / 2
+
+            if proposed.x > maxX {
+                proposed.x = minX
+                proposed.y += stepY
+            }
+
+            proposed.x = max(minX, min(maxX, proposed.x))
+            proposed.y = max(minY, min(maxY, proposed.y))
+        }
+
+        let newId = addNode(spec: spec, at: visible == nil ? proposed : snapToCanvasGrid(proposed))
+        if let from = prior {
+            addLink(from: from, to: newId)
+        }
     }
 
     func defaultParams(for specId: String) -> [String: JSONValue] {
         switch specId {
-        case "scanpy.pp.filter_cells":
+        case "rapids_singlecell.pp.filter_cells", "scanpy.pp.filter_cells":
             return ["min_genes": .number(100)]
-        case "scanpy.pp.filter_genes":
+        case "rapids_singlecell.pp.filter_genes", "scanpy.pp.filter_genes":
             return ["min_cells": .number(3)]
-        case "scanpy.pp.scrublet":
+        case "rapids_singlecell.pp.scrublet", "scanpy.pp.scrublet":
             return ["batch_key": .string("sample")]
-        case "scanpy.pp.highly_variable_genes":
+        case "rapids_singlecell.pp.highly_variable_genes", "scanpy.pp.highly_variable_genes":
             return [
                 "n_top_genes": .number(2000),
                 "batch_key": .string(""),
             ]
-        case "scanpy.pp.calculate_qc_metrics":
+        case "rapids_singlecell.pp.calculate_qc_metrics", "scanpy.pp.calculate_qc_metrics":
             return [
                 "use_mt": .bool(true),
                 "use_ribo": .bool(true),
@@ -363,9 +422,9 @@ final class AppModel: ObservableObject {
                 "percent_top": .string(""),
                 "log1p": .bool(true),
             ]
-        case "scanpy.pp.normalize_total":
+        case "rapids_singlecell.pp.normalize_total", "scanpy.pp.normalize_total":
             return ["target_sum": .string("")]
-        case "scanpy.tl.leiden":
+        case "rapids_singlecell.tl.leiden", "scanpy.tl.leiden":
             return ["res": .number(1.0)]
         default:
             return [:]
@@ -547,12 +606,10 @@ final class AppModel: ObservableObject {
     // MARK: Run
 
     func runPipeline() async {
-        let outDir = outputDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
-        let projName = projectName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let projectDir = outputDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
 
         guard !samples.isEmpty else { appendLog("ERROR: Add at least one sample first"); return }
-        guard !outDir.isEmpty else { appendLog("ERROR: Select an output directory first"); return }
-        guard !projName.isEmpty else { appendLog("ERROR: Set a project name"); return }
+        guard !projectDir.isEmpty else { appendLog("ERROR: Select a project folder first"); return }
 
         let ordered = orderedPipeline()
         guard !ordered.isEmpty else { appendLog("ERROR: Add at least one module"); return }
@@ -581,7 +638,7 @@ final class AppModel: ObservableObject {
             let steps = ordered.map { PipelineStep(specId: $0.specId, params: $0.params) }
             let summary: PipelineRunSummary = try await rpc.call(
                 method: "run_pipeline",
-                params: RunParams(outputDir: outDir, projectName: projName, samples: samples, steps: steps)
+                params: RunParams(outputDir: projectDir, projectName: "", samples: samples, steps: steps)
             )
             if Task.isCancelled { throw CancellationError() }
             appendLog("OK: wrote outputs to \(summary.outputDir)")
@@ -693,7 +750,7 @@ struct WorkflowNode: Codable, Hashable {
     }
 
     func toNode() -> PipelineNode {
-        PipelineNode(id: id, specId: specId, position: CGPointCodable(CGPoint(x: x, y: y)), params: params)
+        PipelineNode(id: id, specId: normalizeModuleSpecId(specId), position: CGPointCodable(CGPoint(x: x, y: y)), params: params)
     }
 }
 
@@ -718,5 +775,34 @@ private extension JSONEncoder {
         let e = JSONEncoder()
         e.outputFormatting = [.prettyPrinted, .sortedKeys]
         return e
+    }
+}
+
+private func normalizeModuleSpecId(_ id: String) -> String {
+    switch id {
+    case "pp.calculate_qc_metrics", "scanpy.pp.calculate_qc_metrics":
+        return "rapids_singlecell.pp.calculate_qc_metrics"
+    case "scanpy.pp.filter_cells":
+        return "rapids_singlecell.pp.filter_cells"
+    case "scanpy.pp.filter_genes":
+        return "rapids_singlecell.pp.filter_genes"
+    case "scanpy.pp.scrublet":
+        return "rapids_singlecell.pp.scrublet"
+    case "scanpy.pp.highly_variable_genes":
+        return "rapids_singlecell.pp.highly_variable_genes"
+    case "scanpy.pp.normalize_total":
+        return "rapids_singlecell.pp.normalize_total"
+    case "scanpy.pp.log1p":
+        return "rapids_singlecell.pp.log1p"
+    case "scanpy.tl.pca":
+        return "rapids_singlecell.pp.pca"
+    case "scanpy.pp.neighbors":
+        return "rapids_singlecell.pp.neighbors"
+    case "scanpy.tl.umap":
+        return "rapids_singlecell.tl.umap"
+    case "scanpy.tl.leiden":
+        return "rapids_singlecell.tl.leiden"
+    default:
+        return id
     }
 }

@@ -38,21 +38,20 @@ struct SettingsSheet: View {
 
             GroupBox("Project") {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("Choose a project directory and name. Outputs are written under `Project/samples/<sample>/checkpoint/`.")
+                    Text("Choose a project folder. scGUI writes project state into `.scanwr/` inside this folder.")
+                        .foregroundStyle(.secondary)
+
+                    Text("Project name: \(model.projectName)")
+                        .font(.caption)
                         .foregroundStyle(.secondary)
 
                     HStack(spacing: 10) {
-                        TextField("Project name", text: $model.projectName)
-                            .frame(width: 240)
-                    }
-
-                    HStack(spacing: 10) {
-                        TextField("Project directory", text: $model.outputDirectory)
+                        TextField("Project folder", text: $model.outputDirectory)
                         Button("Browse…") { showingDirPicker = true }
                     }
 
                     if model.outputDirectory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        Text("Project directory is required.")
+                        Text("Project folder is required.")
                             .font(.caption)
                             .foregroundStyle(.red)
                     }
@@ -77,6 +76,7 @@ struct SettingsSheet: View {
         ) { result in
             if case .success(let urls) = result, let url = urls.first {
                 model.outputDirectory = url.path
+                model.projectName = url.lastPathComponent
             }
         }
     }
