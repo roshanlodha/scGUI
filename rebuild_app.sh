@@ -11,16 +11,20 @@ set -euo pipefail
 # Usage:
 #   ./rebuild_app.sh
 #   ./rebuild_app.sh --open
+#   ./rebuild_app.sh --no-dmg
 #
 # Notes:
 # - For offline-friendly builds, this repo prefers SCANWR_PY_MODE=venv (copy from ./venv).
 # - Outputs:
 #   mac/ScanwrMac/dist/scGUI.app
+#   mac/ScanwrMac/dist/scGUI-<version>.dmg
 
 OPEN_APP="0"
+CREATE_DMG="1"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --open) OPEN_APP="1"; shift ;;
+    --no-dmg) CREATE_DMG="0"; shift ;;
     -h|--help)
       sed -n '1,80p' "$0"
       exit 0
@@ -64,8 +68,18 @@ fi
 
 echo "==> OK: $APP_PATH"
 
+if [[ "$CREATE_DMG" == "1" ]]; then
+  echo "==> Creating .dmg…"
+  "$MAC_ROOT/scripts/make_dmg.sh"
+  DMG_PATH="$(ls -t "$DIST"/scGUI-*.dmg 2>/dev/null | head -n 1 || true)"
+  if [[ -n "$DMG_PATH" ]]; then
+    echo "==> OK: $DMG_PATH"
+  else
+    echo "WARN: DMG creation finished, but no scGUI-*.dmg found in: $DIST" >&2
+  fi
+fi
+
 if [[ "$OPEN_APP" == "1" ]]; then
   echo "==> Opening…"
   open "$APP_PATH"
 fi
-

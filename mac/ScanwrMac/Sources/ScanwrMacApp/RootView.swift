@@ -4,36 +4,33 @@ struct RootView: View {
     @EnvironmentObject private var model: AppModel
     @State private var showAddModule = false
     @State private var showSettings = false
-    @State private var showData = false
     @State private var showExplore = false
-    @State private var showConsole = false
+    @State private var section: SidebarSection = .pipelineBuilder
 
     var body: some View {
         VStack(spacing: 0) {
             TopBar(
-                onData: { showData = true },
                 onExplore: { showExplore = true },
                 onAddModule: { showAddModule = true },
                 onSettings: { showSettings = true },
-                onConsole: { showConsole.toggle() },
                 onRun: { model.startRun() },
                 onStop: { Task { await model.stopRun() } }
             )
             Divider()
-            ZStack(alignment: .bottom) {
-                CanvasView()
-                if showConsole {
-                    ConsoleDrawer(lines: model.logs, onClose: { showConsole = false })
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
+            VSplitView {
+                NavigationSplitView {
+                    Sidebar(section: $section)
+                } detail: {
+                    Detail(section: section)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
+                .navigationSplitViewStyle(.balanced)
+
+                ConsolePanel(lines: model.logs)
+                    .frame(minHeight: 160, idealHeight: 240)
             }
         }
         .task { await model.loadModules() }
-        .popover(isPresented: $showData, arrowEdge: .top) {
-            DataPopover()
-                .frame(width: 860, height: 420)
-                .padding(4)
-        }
         .sheet(isPresented: $showExplore) {
             ExploreDataView()
                 .frame(minWidth: 1020, minHeight: 720)
@@ -53,24 +50,15 @@ struct RootView: View {
 private struct TopBar: View {
     @EnvironmentObject private var model: AppModel
 
-    var onData: () -> Void
     var onExplore: () -> Void
     var onAddModule: () -> Void
     var onSettings: () -> Void
-    var onConsole: () -> Void
     var onRun: () -> Void
     var onStop: () -> Void
 
     var body: some View {
         VStack(spacing: 8) {
             HStack(spacing: 10) {
-                Button {
-                    onData()
-                } label: {
-                    Label("Data", systemImage: "tray.and.arrow.down")
-                }
-                .disabled(model.isRunning)
-
                 Button {
                     onExplore()
                 } label: {
@@ -95,14 +83,6 @@ private struct TopBar: View {
                 }
                 .help("Settings")
                 .disabled(model.isRunning)
-
-                Button {
-                    onConsole()
-                } label: {
-                    Image(systemName: "terminal")
-                        .imageScale(.large)
-                }
-                .help("Console")
 
                 if model.isRunning {
                     Button {
@@ -143,60 +123,6 @@ private struct TopBar: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-    }
-}
-
-private struct ConsoleDrawer: View {
-    var lines: [String]
-    var onClose: () -> Void
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text("Console")
-                    .font(.headline)
-                Spacer()
-                Button {
-                    onClose()
-                } label: {
-                    Image(systemName: "chevron.down")
-                        .imageScale(.large)
-                }
-                .buttonStyle(.plain)
-                .help("Close console")
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-
-            Divider()
-
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 4) {
-                        ForEach(Array(lines.enumerated()), id: \.offset) { idx, line in
-                            Text(line)
-                                .font(.system(.caption, design: .monospaced))
-                                .foregroundStyle(.primary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .id(idx)
-                        }
-                    }
-                    .padding(12)
-                    .textSelection(.enabled)
-                }
-                .background(Color(NSColor.textBackgroundColor))
-                .onChange(of: lines.count) { _, _ in
-                    if let last = lines.indices.last {
-                        proxy.scrollTo(last, anchor: .bottom)
-                    }
-                }
-            }
-        }
-        .frame(height: 260)
-        .background(.ultraThinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 14))
-        .shadow(radius: 14)
-        .padding(14)
     }
 }
 
