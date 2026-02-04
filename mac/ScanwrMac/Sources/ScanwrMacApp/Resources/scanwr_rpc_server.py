@@ -11,8 +11,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 def _set_safe_env() -> None:
     # Scanpy pulls matplotlib/fontconfig; route caches to writable places.
+    os.environ.setdefault("MPLBACKEND", "Agg")
     os.environ.setdefault("MPLCONFIGDIR", tempfile.mkdtemp(prefix="scanwr-mpl-"))
     os.environ.setdefault("XDG_CACHE_HOME", tempfile.gettempdir())
+    os.environ.setdefault("NUMBA_CACHE_DIR", tempfile.mkdtemp(prefix="scanwr-numba-"))
     os.environ.setdefault("PYTHONUNBUFFERED", "1")
 
 
@@ -58,6 +60,210 @@ def _configure_python_logging(verbosity: int) -> None:
             logging.getLogger(noisy).setLevel(logging.WARNING)
     except Exception:
         pass
+
+
+def _json_to_py(v: Any) -> Any:
+    # Match the app's convention: empty strings mean "None" for Scanpy args.
+    if v is None:
+        return None
+    if isinstance(v, str):
+        s = v.strip()
+        return None if s == "" else v
+    return v
+
+
+def inspect_h5ad(path: str, var_names_limit: int = 5000) -> Dict[str, Any]:
+    import scanpy as sc  # local import after env set
+
+    p = Path(path).expanduser().resolve()
+    if not p.exists():
+        raise FileNotFoundError(str(p))
+    if p.suffix.lower() != ".h5ad":
+        raise ValueError(f"Expected .h5ad input, got: {p.name}")
+
+    adata = sc.read_h5ad(str(p))
+
+    try:
+        obs_cols = list(getattr(adata, "obs", {}).columns)
+    except Exception:
+        obs_cols = []
+
+    groupby_candidates: List[str] = []
+    try:
+        obs = adata.obs
+        for k in obs_cols:
+            try:
+                s = obs[k]
+                if str(getattr(s.dtype, "name", "")) == "category":
+                    groupby_candidates.append(k)
+                    continue
+                nunique = int(getattr(s, "nunique")()) if hasattr(s, "nunique") else None
+                if nunique is not None and 1 <= nunique <= 50:
+                    groupby_candidates.append(k)
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+    try:
+        layers = list(getattr(adata, "layers", {}).keys())
+    except Exception:
+        layers = []
+
+    try:
+        var_names_all = list(getattr(adata, "var_names", []))
+    except Exception:
+        var_names_all = []
+    total = len(var_names_all)
+    limit = max(0, int(var_names_limit or 0))
+    truncated = total > limit if limit else False
+    var_names = var_names_all[:limit] if limit else var_names_all
+
+    has_raw = False
+    try:
+        has_raw = getattr(adata, "raw", None) is not None
+    except Exception:
+        has_raw = False
+
+    try:
+        n_obs, n_vars = map(int, getattr(adata, "shape", (0, 0)))
+    except Exception:
+        n_obs, n_vars = (0, 0)
+
+    return {
+        "path": str(p),
+        "nObs": n_obs,
+        "nVars": n_vars,
+        "obsColumns": sorted(map(str, obs_cols)),
+        "groupbyCandidates": sorted(set(map(str, groupby_candidates))),
+        "varNames": list(map(str, var_names)),
+        "varNamesTotal": int(total),
+        "varNamesTruncated": bool(truncated),
+        "layers": sorted(map(str, layers)),
+        "hasRaw": bool(has_raw),
+    }
+
+
+def plot_violin(params: Dict[str, Any]) -> Dict[str, Any]:
+    import scanpy as sc  # local import after env set
+    import matplotlib as mpl
+
+    h5ad_path = str(params.get("h5adPath") or params.get("path") or "").strip()
+    if not h5ad_path:
+        raise ValueError("Missing h5adPath")
+    p = Path(h5ad_path).expanduser().resolve()
+    if not p.exists():
+        raise FileNotFoundError(str(p))
+
+    keys = params.get("keys")
+    if not keys:
+        raise ValueError("Missing keys")
+    if isinstance(keys, str):
+        keys = [keys]
+    keys = [str(k) for k in keys]
+
+    output_path = str(params.get("outputPath") or "").strip()
+    if not output_path:
+        raise ValueError("Missing outputPath")
+    out = Path(output_path).expanduser().resolve()
+    if out.suffix.lower() != ".svg":
+        out = out.with_suffix(".svg")
+    out.parent.mkdir(parents=True, exist_ok=True)
+
+    # Ensure SVG text stays editable.
+    # Source - https://stackoverflow.com/a/50563208
+    new_rc_params = {'text.usetex': False,
+    "svg.fonttype": 'none'
+    }
+    mpl.rcParams.update(new_rc_params)
+
+    adata = sc.read_h5ad(str(p))
+
+    kwargs: Dict[str, Any] = {}
+    groupby = _json_to_py(params.get("groupby"))
+    if groupby is not None:
+        kwargs["groupby"] = str(groupby)
+
+    # Map json keys to Scanpy arg names (snake_case).
+    if "log" in params:
+        kwargs["log"] = bool(params.get("log"))
+    if "useRaw" in params or "use_raw" in params:
+        use_raw = params.get("useRaw", params.get("use_raw"))
+        if use_raw is not None:
+            kwargs["use_raw"] = bool(use_raw)
+    if "stripplot" in params:
+        kwargs["stripplot"] = bool(params.get("stripplot"))
+    if "jitter" in params:
+        jitter = params.get("jitter")
+        if isinstance(jitter, bool):
+            kwargs["jitter"] = jitter
+        elif jitter is None:
+            pass
+        else:
+            try:
+                kwargs["jitter"] = float(jitter)
+            except Exception:
+                kwargs["jitter"] = True
+    if "size" in params:
+        try:
+            kwargs["size"] = int(params.get("size"))
+        except Exception:
+            kwargs["size"] = 1
+    layer = _json_to_py(params.get("layer"))
+    if layer is not None:
+        kwargs["layer"] = str(layer)
+    density_norm = _json_to_py(params.get("densityNorm", params.get("density_norm")))
+    if density_norm is not None:
+        kwargs["density_norm"] = density_norm
+    order = params.get("order")
+    if isinstance(order, list) and order:
+        kwargs["order"] = [str(x) for x in order]
+    if "multiPanel" in params or "multi_panel" in params:
+        kwargs["multi_panel"] = bool(params.get("multiPanel", params.get("multi_panel")))
+    if "xlabel" in params:
+        kwargs["xlabel"] = str(params.get("xlabel") or "")
+    ylabel = _json_to_py(params.get("ylabel"))
+    if ylabel is not None:
+        if isinstance(ylabel, str) and "," in ylabel:
+            parts = [x.strip() for x in ylabel.split(",") if x.strip()]
+            kwargs["ylabel"] = parts if parts else ylabel
+        else:
+            kwargs["ylabel"] = ylabel
+    if "rotation" in params and params.get("rotation") is not None:
+        kwargs["rotation"] = float(params.get("rotation"))
+    if "show" in params and params.get("show") is not None:
+        kwargs["show"] = bool(params.get("show"))
+    scale = _json_to_py(params.get("scale"))
+    if scale is not None:
+        kwargs["scale"] = scale
+
+    kwds = params.get("kwds") or {}
+    if isinstance(kwds, dict):
+        for k, v in kwds.items():
+            kwargs[str(k)] = _json_to_py(v)
+
+    # Always run headlessly for the GUI.
+    kwargs["show"] = False
+    kwargs["save"] = None
+
+    ret = sc.pl.violin(adata, keys=keys, **kwargs)
+
+    import matplotlib.pyplot as plt
+
+    fig = None
+    try:
+        fig = getattr(ret, "figure", None)
+        if fig is None:
+            fig = getattr(ret, "fig", None)
+    except Exception:
+        fig = None
+    if fig is None:
+        fig = plt.gcf()
+
+    fig.savefig(str(out), format="svg", bbox_inches="tight")
+    plt.close(fig)
+
+    return {"svgPath": str(out)}
 
 def _is_10x_mtx_dir(path: Path) -> bool:
     required_any = {"matrix.mtx", "matrix.mtx.gz"}
@@ -590,6 +796,11 @@ def _handle(method: str, params: Any) -> Any:
             return {"ok": False, "error": str(e)}
     if method == "detect_reader":
         return detect_reader(path=params["path"])
+    if method == "inspect_h5ad":
+        limit = int(params.get("varNamesLimit", 5000))
+        return inspect_h5ad(path=params["path"], var_names_limit=limit)
+    if method == "plot_violin":
+        return plot_violin(params=params)
     if method == "run_pipeline":
         # New API: per-sample raw input paths
         if "samples" in params:

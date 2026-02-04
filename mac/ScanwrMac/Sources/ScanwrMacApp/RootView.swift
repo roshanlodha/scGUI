@@ -5,12 +5,14 @@ struct RootView: View {
     @State private var showAddModule = false
     @State private var showSettings = false
     @State private var showData = false
+    @State private var showExplore = false
     @State private var showConsole = false
 
     var body: some View {
         VStack(spacing: 0) {
             TopBar(
                 onData: { showData = true },
+                onExplore: { showExplore = true },
                 onAddModule: { showAddModule = true },
                 onSettings: { showSettings = true },
                 onConsole: { showConsole.toggle() },
@@ -32,6 +34,10 @@ struct RootView: View {
                 .frame(width: 860, height: 420)
                 .padding(4)
         }
+        .sheet(isPresented: $showExplore) {
+            ExploreDataView()
+                .frame(minWidth: 1020, minHeight: 720)
+        }
         .sheet(isPresented: $showSettings) { SettingsSheet() }
         .popover(isPresented: $showAddModule, arrowEdge: .top) {
             AddModulePopover { spec in
@@ -48,6 +54,7 @@ private struct TopBar: View {
     @EnvironmentObject private var model: AppModel
 
     var onData: () -> Void
+    var onExplore: () -> Void
     var onAddModule: () -> Void
     var onSettings: () -> Void
     var onConsole: () -> Void
@@ -63,6 +70,13 @@ private struct TopBar: View {
                     Label("Data", systemImage: "tray.and.arrow.down")
                 }
                 .disabled(model.isRunning)
+
+                Button {
+                    onExplore()
+                } label: {
+                    Label("Explore Data", systemImage: "chart.xyaxis.line")
+                }
+                .disabled(!model.hasProject)
 
                 Button {
                     onAddModule()

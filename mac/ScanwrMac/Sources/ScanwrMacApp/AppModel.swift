@@ -57,6 +57,22 @@ final class AppModel: ObservableObject {
         return URL(fileURLWithPath: base).appendingPathComponent(name)
     }
 
+    static func sanitizeFilename(_ s: String) -> String {
+        let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return "step" }
+        var out: [Character] = []
+        for ch in trimmed {
+            if ch.isLetter || ch.isNumber || ch == "-" || ch == "_" || ch == "." {
+                out.append(ch)
+            } else {
+                out.append("_")
+            }
+        }
+        let joined = String(out)
+        let stripped = joined.trimmingCharacters(in: CharacterSet(charactersIn: "_"))
+        return stripped.isEmpty ? "step" : stripped
+    }
+
     // MARK: Logging / progress
 
     func appendLog(_ line: String) {
@@ -180,6 +196,19 @@ final class AppModel: ObservableObject {
             appendLog("detect_reader ERROR: \(error)")
             return nil
         }
+    }
+
+    // MARK: Explore (plots)
+
+    func inspectH5ad(path: String, varNamesLimit: Int = 5000) async throws -> AdataInspectResult {
+        await ensureBackendStarted()
+        struct Params: Codable { var path: String; var varNamesLimit: Int }
+        return try await rpc.call(method: "inspect_h5ad", params: Params(path: path, varNamesLimit: varNamesLimit))
+    }
+
+    func plotViolin(req: ViolinPlotRequest) async throws -> ViolinPlotResult {
+        await ensureBackendStarted()
+        return try await rpc.call(method: "plot_violin", params: req)
     }
 
     // MARK: Project open/create/close + recents

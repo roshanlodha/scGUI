@@ -117,3 +117,42 @@ struct SampleRunResult: Codable, Hashable {
     var finalPath: String
     var shape: [Int]
 }
+
+struct AdataInspectResult: Codable, Hashable {
+    var path: String
+    var nObs: Int
+    var nVars: Int
+    var obsColumns: [String]
+    var groupbyCandidates: [String]
+    var varNames: [String]
+    var varNamesTotal: Int
+    var varNamesTruncated: Bool
+    var layers: [String]
+    var hasRaw: Bool
+}
+
+struct ViolinPlotRequest: Codable, Hashable {
+    var h5adPath: String
+    var keys: [String]
+    var groupby: String?
+    var log: Bool
+    var useRaw: Bool?
+    var stripplot: Bool
+    var jitter: JSONValue?
+    var size: Int
+    var layer: String?
+    var densityNorm: String
+    var order: [String]?
+    var multiPanel: Bool
+    var xlabel: String
+    var ylabel: String?
+    var rotation: Double?
+    var show: Bool?
+    var scale: String?
+    var kwds: [String: JSONValue]
+    var outputPath: String
+}
+
+struct ViolinPlotResult: Codable, Hashable {
+    var svgPath: String
+}
