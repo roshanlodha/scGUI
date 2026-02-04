@@ -56,6 +56,10 @@ struct NodeInspector: View {
                 LeidenInspector(params: $node.params)
             } else if node.specId == "rapids_singlecell.tl.leiden" {
                 LeidenInspector(params: $node.params)
+            } else if node.specId == "scanpy.tl.rank_genes_groups" {
+                RankGenesGroupsInspector(params: $node.params)
+            } else if node.specId == "rapids_singlecell.tl.rank_genes_groups" {
+                RankGenesGroupsInspector(params: $node.params)
             } else {
                 GenericParamsInspector(params: $node.params)
             }
@@ -321,6 +325,67 @@ private struct LeidenInspector: View {
         Binding<String>(
             get: { params[key]?.stringValue ?? (params[key]?.doubleValue.map { String($0) } ?? "") },
             set: { params[key] = .string($0) }
+        )
+    }
+}
+
+private struct RankGenesGroupsInspector: View {
+    @Binding var params: [String: JSONValue]
+
+    private enum Groupby: String, CaseIterable, Identifiable {
+        case leiden
+        case kmeans
+        case louvain
+
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .leiden: return "leiden"
+            case .kmeans: return "k-means"
+            case .louvain: return "louvain"
+            }
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Parameters").font(.subheadline).bold()
+            Text("Ranks marker genes per cluster/group (writes results into `adata.uns['rank_genes_groups']`). Optional plots are saved as SVG under `Project/.scanwr/plots/`.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            LabeledContent("groupby") {
+                Picker("", selection: bindingGroupby()) {
+                    ForEach(Groupby.allCases) { g in
+                        Text(g.title).tag(g.rawValue)
+                    }
+                }
+                .frame(width: 220)
+            }
+
+            Toggle("Create Dotplot", isOn: bindingBool("create_dotplot", default: false))
+            Toggle("Create Heatmap", isOn: bindingBool("create_heatmap", default: true))
+        }
+    }
+
+    private func bindingGroupby() -> Binding<String> {
+        Binding<String>(
+            get: {
+                let raw = params["groupby"]?.stringValue ?? "leiden"
+                let s = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                if s == "k-means" || s == "k_means" { return "kmeans" }
+                if Groupby.allCases.map(\.rawValue).contains(s) { return s }
+                return "leiden"
+            },
+            set: { params["groupby"] = .string($0) }
+        )
+    }
+
+    private func bindingBool(_ key: String, default def: Bool) -> Binding<Bool> {
+        Binding<Bool>(
+            get: { params[key]?.boolValue ?? def },
+            set: { params[key] = .bool($0) }
         )
     }
 }

@@ -457,6 +457,12 @@ final class AppModel: ObservableObject {
             return ["target_sum": .string("")]
         case "rapids_singlecell.tl.leiden", "scanpy.tl.leiden":
             return ["res": .number(1.0)]
+        case "scanpy.tl.rank_genes_groups", "rapids_singlecell.tl.rank_genes_groups":
+            return [
+                "groupby": .string("leiden"),
+                "create_dotplot": .bool(false),
+                "create_heatmap": .bool(true),
+            ]
         default:
             return [:]
         }
@@ -615,6 +621,11 @@ final class AppModel: ObservableObject {
             try FileManager.default.copyItem(at: url, to: dest)
             loadTemplatesForCurrentProject()
             appendLog("Imported template: \(dest.lastPathComponent)")
+            if let t = WorkflowTemplate.load(from: dest) {
+                applyTemplate(t)
+            } else {
+                appendLog("ERROR: Imported file isn't a valid template: \(dest.lastPathComponent)")
+            }
         } catch {
             appendLog("ERROR: import template failed: \(error)")
         }
@@ -749,7 +760,7 @@ final class AppModel: ObservableObject {
     // MARK: Pipeline normalization (linear chain UI)
 
     private var preferRapidsModules: Bool {
-        availableModules.contains(where: { $0.id.hasPrefix("rapids_singlecell.") })
+        false
     }
 
     private func normalizeLoadedWorkflowForAvailableModules() {
@@ -883,6 +894,7 @@ private func normalizeModuleSpecId(_ id: String, preferRapids: Bool) -> String {
         "scanpy.pp.neighbors": "rapids_singlecell.pp.neighbors",
         "scanpy.tl.umap": "rapids_singlecell.tl.umap",
         "scanpy.tl.leiden": "rapids_singlecell.tl.leiden",
+        "scanpy.tl.rank_genes_groups": "rapids_singlecell.tl.rank_genes_groups",
     ]
 
     let rapidsToScanpy: [String: String] = [
@@ -897,6 +909,7 @@ private func normalizeModuleSpecId(_ id: String, preferRapids: Bool) -> String {
         "rapids_singlecell.pp.neighbors": "scanpy.pp.neighbors",
         "rapids_singlecell.tl.umap": "scanpy.tl.umap",
         "rapids_singlecell.tl.leiden": "scanpy.tl.leiden",
+        "rapids_singlecell.tl.rank_genes_groups": "scanpy.tl.rank_genes_groups",
     ]
 
     if preferRapids {

@@ -1,6 +1,6 @@
 # scGUI (scanwr), formerly scAnWr
 
-scGUI is a native macOS app (SwiftUI) for building and running single‑cell analysis pipelines powered by [Scanpy](https://scanpy.readthedocs.io/) (and `rapids_singlecell` when available for GPU acceleration). It uses a bundled Python JSON‑RPC backend so end users can run analyses without setting up a local Python environment.
+scGUI is a native macOS app (SwiftUI) for building and running single‑cell analysis pipelines powered by [Scanpy](https://scanpy.readthedocs.io/). It uses a bundled Python JSON‑RPC backend so end users can run analyses without setting up a local Python environment.
 
 ## What scGUI does
 
@@ -30,8 +30,8 @@ Each scGUI “project” is just a folder on disk. The app stores state in a sin
 
 ## Release packaging
 
-- Current version: `0.2.1`
-- Build outputs: `mac/ScanwrMac/dist/scGUI.app` and `mac/ScanwrMac/dist/scGUI-0.2.1.dmg`
+- Current version: `0.2.2`
+- Build outputs: `mac/ScanwrMac/dist/scGUI.app` and `mac/ScanwrMac/dist/scGUI-0.2.2.dmg`
 
 ## Development & contributing
 

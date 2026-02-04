@@ -63,7 +63,7 @@ def _configure_python_logging(verbosity: int) -> None:
 
 
 def _json_to_py(v: Any) -> Any:
-    # Match the app's convention: empty strings mean "None" for Scanpy args.
+    # Match the app's convention: empty strings mean "None" for backend args.
     if v is None:
         return None
     if isinstance(v, str):
@@ -73,7 +73,7 @@ def _json_to_py(v: Any) -> Any:
 
 
 def inspect_h5ad(path: str, var_names_limit: int = 5000) -> Dict[str, Any]:
-    import scanpy as sc  # local import after env set
+    import anndata as ad  # local import after env set
 
     p = Path(path).expanduser().resolve()
     if not p.exists():
@@ -81,7 +81,7 @@ def inspect_h5ad(path: str, var_names_limit: int = 5000) -> Dict[str, Any]:
     if p.suffix.lower() != ".h5ad":
         raise ValueError(f"Expected .h5ad input, got: {p.name}")
 
-    adata = sc.read_h5ad(str(p))
+    adata = ad.read_h5ad(str(p))
 
     try:
         obs_cols = list(getattr(adata, "obs", {}).columns)
@@ -174,7 +174,7 @@ def inspect_h5ad(path: str, var_names_limit: int = 5000) -> Dict[str, Any]:
 
 
 def plot_violin(params: Dict[str, Any]) -> Dict[str, Any]:
-    import scanpy as sc  # local import after env set
+    import anndata as ad  # local import after env set
     import matplotlib as mpl
 
     h5ad_path = str(params.get("h5adPath") or params.get("path") or "").strip()
@@ -206,7 +206,7 @@ def plot_violin(params: Dict[str, Any]) -> Dict[str, Any]:
     }
     mpl.rcParams.update(new_rc_params)
 
-    adata = sc.read_h5ad(str(p))
+    adata = ad.read_h5ad(str(p))
 
     kwargs: Dict[str, Any] = {}
     groupby = _json_to_py(params.get("groupby"))
@@ -375,7 +375,7 @@ def _vector_from_keyref(adata: Any, keyref: str, layer: str | None, use_raw: boo
 
 
 def plot_custom(params: Dict[str, Any]) -> Dict[str, Any]:
-    import scanpy as sc  # local import after env set
+    import anndata as ad  # local import after env set
     import matplotlib as mpl
     import matplotlib.pyplot as plt
 
@@ -411,7 +411,7 @@ def plot_custom(params: Dict[str, Any]) -> Dict[str, Any]:
     mpl.rcParams.update({"text.usetex": False, "svg.fonttype": "none"})
 
     _notify_log(f"Plot: loading {p.name}…")
-    adata = sc.read_h5ad(str(p))
+    adata = ad.read_h5ad(str(p))
 
     layer = str(params.get("layer") or "").strip() or None
     use_raw = params.get("useRaw")
@@ -741,30 +741,33 @@ def _parse_int_list(value: str) -> Optional[List[int]]:
     return [int(x) for x in items]
 
 
-def _run_module(adata, spec_id: str, params: Dict[str, Any]) -> None:
+def _run_module(
+    adata,
+    spec_id: str,
+    params: Dict[str, Any],
+    *,
+    plots_dir: Path | None = None,
+    sample: str | None = None,
+) -> None:
     import scanpy as sc  # local import after env set
 
-    # Backwards compatibility (older ids)
-    if spec_id == "pp.calculate_qc_metrics":
-        spec_id = "scanpy.pp.calculate_qc_metrics"
-    # UI may persist GPU-preferring ids even when `rapids_singlecell` isn't present.
-    # For now, transparently fall back to Scanpy equivalents.
-    if spec_id.startswith("rapids_singlecell."):
-        rapids_to_scanpy = {
-            "rapids_singlecell.pp.filter_cells": "scanpy.pp.filter_cells",
-            "rapids_singlecell.pp.filter_genes": "scanpy.pp.filter_genes",
-            "rapids_singlecell.pp.scrublet": "scanpy.pp.scrublet",
-            "rapids_singlecell.pp.highly_variable_genes": "scanpy.pp.highly_variable_genes",
-            "rapids_singlecell.pp.calculate_qc_metrics": "scanpy.pp.calculate_qc_metrics",
-            "rapids_singlecell.pp.normalize_total": "scanpy.pp.normalize_total",
-            "rapids_singlecell.pp.log1p": "scanpy.pp.log1p",
-            # Note: RAPIDS uses scanpy.tl.pca semantics; some older templates used a pp.* id.
-            "rapids_singlecell.pp.pca": "scanpy.tl.pca",
-            "rapids_singlecell.pp.neighbors": "scanpy.pp.neighbors",
-            "rapids_singlecell.tl.umap": "scanpy.tl.umap",
-            "rapids_singlecell.tl.leiden": "scanpy.tl.leiden",
-        }
-        spec_id = rapids_to_scanpy.get(spec_id, spec_id)
+    # Backwards compatibility: map RAPIDS ids (and older shorthand) back to Scanpy ids.
+    legacy_to_scanpy = {
+        "pp.calculate_qc_metrics": "scanpy.pp.calculate_qc_metrics",
+        "rapids_singlecell.pp.filter_cells": "scanpy.pp.filter_cells",
+        "rapids_singlecell.pp.filter_genes": "scanpy.pp.filter_genes",
+        "rapids_singlecell.pp.calculate_qc_metrics": "scanpy.pp.calculate_qc_metrics",
+        "rapids_singlecell.pp.scrublet": "scanpy.pp.scrublet",
+        "rapids_singlecell.pp.highly_variable_genes": "scanpy.pp.highly_variable_genes",
+        "rapids_singlecell.pp.normalize_total": "scanpy.pp.normalize_total",
+        "rapids_singlecell.pp.log1p": "scanpy.pp.log1p",
+        "rapids_singlecell.pp.pca": "scanpy.tl.pca",
+        "rapids_singlecell.pp.neighbors": "scanpy.pp.neighbors",
+        "rapids_singlecell.tl.umap": "scanpy.tl.umap",
+        "rapids_singlecell.tl.leiden": "scanpy.tl.leiden",
+        "rapids_singlecell.tl.rank_genes_groups": "scanpy.tl.rank_genes_groups",
+    }
+    spec_id = legacy_to_scanpy.get(spec_id, spec_id)
 
     def _opt_int(key: str) -> Optional[int]:
         v = (params or {}).get(key)
@@ -940,6 +943,52 @@ def _run_module(adata, spec_id: str, params: Dict[str, Any]) -> None:
             sc.tl.leiden(adata, resolution=res)
         return
 
+    if spec_id == "scanpy.tl.rank_genes_groups":
+        import matplotlib.pyplot as plt
+
+        groupby_raw = _opt_str("groupby") or "leiden"
+        groupby_norm = groupby_raw.strip().lower()
+        groupby = {
+            "leiden": "leiden",
+            "louvain": "louvain",
+            "kmeans": "kmeans",
+            "k-means": "kmeans",
+            "k_means": "kmeans",
+        }.get(groupby_norm, groupby_raw.strip())
+
+        try:
+            obs = getattr(adata, "obs", None)
+            if obs is None or groupby not in obs.columns:
+                raise KeyError(groupby)
+        except Exception:
+            raise RuntimeError(
+                f"rank_genes_groups: groupby='{groupby}' not found in adata.obs. "
+                "Run clustering first (e.g. Leiden) or choose a different groupby."
+            )
+
+        sc.tl.rank_genes_groups(adata, groupby=groupby)
+
+        create_dotplot = _opt_bool("create_dotplot", False)
+        create_heatmap = _opt_bool("create_heatmap", True)
+
+        if (create_dotplot or create_heatmap) and plots_dir is not None:
+            plots_dir.mkdir(parents=True, exist_ok=True)
+            sample_slug = _sanitize_filename(sample or "sample")
+            group_slug = _sanitize_filename(groupby)
+
+            if create_dotplot:
+                out = plots_dir / f"{sample_slug}__rank_genes_groups__{group_slug}__dotplot.svg"
+                sc.pl.rank_genes_groups_dotplot(adata, groupby=groupby, show=False)
+                plt.gcf().savefig(str(out), format="svg", bbox_inches="tight")
+                plt.close("all")
+
+            if create_heatmap:
+                out = plots_dir / f"{sample_slug}__rank_genes_groups__{group_slug}__heatmap.svg"
+                sc.pl.rank_genes_groups_heatmap(adata, groupby=groupby, show=False)
+                plt.gcf().savefig(str(out), format="svg", bbox_inches="tight")
+                plt.close("all")
+        return
+
     raise NotImplementedError(spec_id)
 
 
@@ -1022,6 +1071,13 @@ def list_modules() -> List[Dict[str, Any]]:
             "title": "Leiden",
             "scanpyQualname": "scanpy.tl.leiden",
         },
+        {
+            "id": "scanpy.tl.rank_genes_groups",
+            "group": "tl",
+            "namespace": "core",
+            "title": "Rank Genes Groups",
+            "scanpyQualname": "scanpy.tl.rank_genes_groups",
+        },
     ]
 
 
@@ -1036,11 +1092,13 @@ def _sanitize_filename(s: str) -> str:
 
 
 def run_pipeline(input_path: str, output_dir: str, steps: List[Dict[str, Any]]) -> Dict[str, Any]:
-    import scanpy as sc  # local import after env set
+    import anndata as ad  # local import after env set
 
     in_path = Path(input_path).expanduser().resolve()
     out_dir = Path(output_dir).expanduser().resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
+    plots_dir = out_dir / "plots"
+    plots_dir.mkdir(parents=True, exist_ok=True)
 
     if not in_path.exists():
         raise FileNotFoundError(str(in_path))
@@ -1048,14 +1106,14 @@ def run_pipeline(input_path: str, output_dir: str, steps: List[Dict[str, Any]]) 
         raise ValueError(f"Expected .h5ad input, got: {in_path.name}")
 
     _notify_log("Loading input .h5ad…")
-    adata = sc.read_h5ad(str(in_path))
+    adata = ad.read_h5ad(str(in_path))
 
     checkpoints: List[str] = []
     for i, step in enumerate(steps, start=1):
         spec_id = str(step.get("specId"))
         params = step.get("params") or {}
         _notify_log(f"Step {i}/{len(steps)}: {spec_id}")
-        _run_module(adata, spec_id, params)
+        _run_module(adata, spec_id, params, plots_dir=plots_dir, sample="single")
 
         ck_name = f"{i:02d}_{_sanitize_filename(spec_id)}.h5ad"
         ck_path = out_dir / ck_name
@@ -1064,7 +1122,7 @@ def run_pipeline(input_path: str, output_dir: str, steps: List[Dict[str, Any]]) 
         checkpoints.append(str(ck_path))
 
         # Reload from checkpoint to ensure the next step operates on an on-disk checkpointed state.
-        adata = sc.read_h5ad(str(ck_path))
+        adata = ad.read_h5ad(str(ck_path))
 
     final_path = out_dir / "final.h5ad"
     _notify_log(f"Saving final: {final_path.name}")
@@ -1094,7 +1152,7 @@ def _step_sig(step: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def run_pipeline_multi(output_dir: str, project_name: str, samples: List[Dict[str, Any]], steps: List[Dict[str, Any]]) -> Dict[str, Any]:
-    import scanpy as sc  # local import after env set
+    import anndata as ad  # local import after env set
 
     out_dir = Path(output_dir).expanduser().resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1109,8 +1167,10 @@ def run_pipeline_multi(output_dir: str, project_name: str, samples: List[Dict[st
     scanwr_dir.mkdir(parents=True, exist_ok=True)
     checkpoints_dir = scanwr_dir / "checkpoints"
     history_dir = scanwr_dir / "history"
+    plots_dir = scanwr_dir / "plots"
     checkpoints_dir.mkdir(parents=True, exist_ok=True)
     history_dir.mkdir(parents=True, exist_ok=True)
+    plots_dir.mkdir(parents=True, exist_ok=True)
 
     # Persist metadata for reload/debug.
     meta_path = scanwr_dir / "metadata.txt"
@@ -1172,7 +1232,7 @@ def run_pipeline_multi(output_dir: str, project_name: str, samples: List[Dict[st
                 step_index=prefix_len,
                 step_count=len(requested_sigs),
             )
-            adata = sc.read_h5ad(str(checkpoint_h5ad))
+            adata = ad.read_h5ad(str(checkpoint_h5ad))
             reader = reader_override or "auto"
         else:
             _notify_log(f"Reading {sample}…")
@@ -1203,7 +1263,7 @@ def run_pipeline_multi(output_dir: str, project_name: str, samples: List[Dict[st
                 step_count=len(steps),
             )
             _notify_log(f"[{sample}] Step {i}/{len(steps)}: {spec_id}")
-            _run_module(adata, spec_id, params)
+            _run_module(adata, spec_id, params, plots_dir=plots_dir, sample=sample)
 
             _notify_log(f"[{sample}] Updating checkpoint.h5ad")
             adata.write_h5ad(str(checkpoint_h5ad))
@@ -1211,7 +1271,7 @@ def run_pipeline_multi(output_dir: str, project_name: str, samples: List[Dict[st
             done = requested_sigs[:i]
             _write_cached_prefix(done)
             checkpoints.append(str(checkpoint_h5ad))
-            adata = sc.read_h5ad(str(checkpoint_h5ad))
+            adata = ad.read_h5ad(str(checkpoint_h5ad))
 
         final_path = checkpoint_h5ad
         _notify_progress(
@@ -1246,13 +1306,15 @@ def _handle(method: str, params: Any) -> Any:
         return list_modules()
     if method == "set_verbosity":
         try:
-            import scanpy as sc
+            import logging
 
             level = int(params.get("level", 3))
             level = max(0, min(4, level))
-            sc.settings.verbosity = level
             _configure_python_logging(level)
-            _notify_log(f"scanpy verbosity={sc.settings.verbosity}")
+            # Keep root logger conservative; backend functions should emit explicit logs to the app.
+            base = logging.WARNING if level <= 3 else logging.INFO
+            logging.getLogger().setLevel(base)
+            _notify_log(f"verbosity={level}")
             return {"ok": True}
         except Exception as e:
             return {"ok": False, "error": str(e)}
@@ -1285,27 +1347,21 @@ def main() -> int:
     try:
         import logging
 
-        # Default to a conservative log level; Scanpy's own verbosity controls its output.
+        # Default to a conservative log level; the app console is the primary signal channel.
         logging.basicConfig(level=logging.WARNING)
     except Exception:
         pass
 
-    # Make Scanpy as verbose as possible.
     try:
-        import scanpy as sc
-
         v_raw = os.environ.get("SCANWR_VERBOSITY", "3")
         try:
             v = int(v_raw)
         except Exception:
             v = 3
-        sc.settings.verbosity = max(0, min(4, v))
-        # Force logging to stdout so it shows up in the app console.
-        sc.settings.logfile = sys.stdout
-        _configure_python_logging(sc.settings.verbosity)
-        _notify_log(f"scanpy verbosity={sc.settings.verbosity}")
-    except Exception as e:
-        _notify_log(f"scanpy verbosity setup failed: {e}")
+        v = max(0, min(4, v))
+        _configure_python_logging(v)
+    except Exception:
+        pass
 
     for line in sys.stdin:
         line = line.strip()
