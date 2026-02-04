@@ -6,6 +6,7 @@ scGUI, formerly scAnWr, is a native SwiftUI macOS front-end that talks to a Pyth
 
 - Project state is persisted under `Project/.scanwr/` (including the current canvas workflow in `template.json`).
 - The Welcome screen includes buttons for Settings (verbosity slider) and clearing app cache.
+- Custom modules are exposed as `custom.<module>` (orange badge in the UI). `custom.select_group` filters cells by `adata.obs[group] == value` (e.g. `group=leiden`, `value=3` keeps cluster "3").
 
 ## Run (development)
 

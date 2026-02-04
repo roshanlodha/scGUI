@@ -90,7 +90,7 @@ private struct ModuleRow: View {
             }
             Spacer(minLength: 10)
             if let ns = spec.namespace, ns != "core" {
-                Text(ns == "experimental" ? "exp" : "ext")
+                Text(ns == "experimental" ? "exp" : (ns == "custom" ? "cust" : "ext"))
                     .font(.caption)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)

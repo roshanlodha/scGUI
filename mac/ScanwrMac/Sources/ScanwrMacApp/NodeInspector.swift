@@ -139,6 +139,8 @@ private struct NodeInspectorContent: View {
             RankGenesGroupsInspector(params: $params)
         } else if specId == "rapids_singlecell.tl.rank_genes_groups" {
             RankGenesGroupsInspector(params: $params)
+        } else if specId == "custom.select_group" {
+            SelectGroupInspector(params: $params)
         } else {
             GenericParamsInspector(params: $params)
         }
@@ -497,6 +499,74 @@ private struct RankGenesGroupsInspector: View {
         Binding<Bool>(
             get: { params[key]?.boolValue ?? def },
             set: { params[key] = .bool($0) }
+        )
+    }
+}
+
+private struct SelectGroupInspector: View {
+    @Binding var params: [String: JSONValue]
+
+    private enum Group: String, CaseIterable, Identifiable {
+        case leiden
+        case annotation
+        case louvain
+        case kmeans
+
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .leiden: return "leiden"
+            case .annotation: return "annotation"
+            case .louvain: return "louvain"
+            case .kmeans: return "k-means"
+            }
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Parameters").font(.subheadline).bold()
+            Text("Keep only the cells where `adata.obs[group] == value`.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            LabeledContent("group") {
+                Picker("", selection: bindingGroup()) {
+                    ForEach(Group.allCases) { g in
+                        Text(g.title).tag(g.rawValue)
+                    }
+                }
+                .frame(width: 220)
+            }
+
+            LabeledContent("value") {
+                TextField("", text: bindingValue())
+                    .frame(width: 220)
+            }
+        }
+    }
+
+    private func bindingGroup() -> Binding<String> {
+        Binding<String>(
+            get: {
+                let raw = params["group"]?.stringValue ?? "leiden"
+                let s = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                if s == "k-means" || s == "k_means" { return "kmeans" }
+                if Group.allCases.map(\.rawValue).contains(s) { return s }
+                return "leiden"
+            },
+            set: { params["group"] = .string($0) }
+        )
+    }
+
+    private func bindingValue() -> Binding<String> {
+        Binding<String>(
+            get: {
+                params["value"]?.stringValue
+                    ?? (params["value"]?.doubleValue.map { $0.rounded() == $0 ? String(Int($0)) : String($0) } ?? "")
+            },
+            set: { params["value"] = .string($0) }
         )
     }
 }

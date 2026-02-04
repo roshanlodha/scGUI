@@ -818,6 +818,26 @@ def _run_module(
                 return False
         return bool(v)
 
+    def _subset_adata_inplace(adata_obj: Any, obs_mask: Any) -> None:
+        # Prefer AnnData's inplace subset APIs to keep the same object identity.
+        try:
+            adata_obj._inplace_subset_obs(obs_mask)
+            return
+        except Exception:
+            pass
+        try:
+            adata_obj._inplace_subset_obs(obs_mask.tolist())
+            return
+        except Exception:
+            pass
+        try:
+            sub = adata_obj[obs_mask].copy()
+            adata_obj.__dict__.clear()
+            adata_obj.__dict__.update(sub.__dict__)
+            return
+        except Exception as e:
+            raise RuntimeError("Failed to subset AnnData in-place for custom module.") from e
+
     if spec_id == "scanpy.pp.filter_cells":
         # scanpy.pp.filter_cells allows only ONE of these thresholds per call.
         for key in ["min_counts", "min_genes", "max_counts", "max_genes"]:
@@ -833,7 +853,72 @@ def _run_module(
             val = _opt_int(key)
             if val is None:
                 continue
-            sc.pp.filter_genes(adata, **{key: val}, inplace=True)
+        sc.pp.filter_genes(adata, **{key: val}, inplace=True)
+        return
+
+    if spec_id == "custom.select_group":
+        import numpy as np  # type: ignore
+
+        group_raw = _opt_str("group") or ""
+        value_raw = params.get("value", None)
+        if value_raw is None:
+            value_raw = _opt_str("value")
+        if not str(group_raw).strip():
+            raise ValueError("custom.select_group: missing required param 'group'")
+        if value_raw is None or (isinstance(value_raw, str) and not value_raw.strip()):
+            raise ValueError("custom.select_group: missing required param 'value'")
+
+        group_norm = str(group_raw).strip().lower()
+        group_key = {
+            "leiden": "leiden",
+            "louvain": "louvain",
+            "annotation": "annotation",
+            "kmeans": "kmeans",
+            "k-means": "kmeans",
+            "k_means": "kmeans",
+        }.get(group_norm, group_norm)
+
+        try:
+            obs = adata.obs
+        except Exception as e:
+            raise RuntimeError("custom.select_group: AnnData is missing .obs") from e
+
+        if group_key not in getattr(obs, "columns", []):
+            cols = []
+            try:
+                cols = list(map(str, obs.columns))
+            except Exception:
+                cols = []
+            preview = ", ".join(cols[:40]) + ("…" if len(cols) > 40 else "")
+            raise RuntimeError(
+                f"custom.select_group: group column '{group_key}' not found in adata.obs. "
+                f"Available columns (first {min(len(cols), 40)}): {preview}"
+            )
+
+        s = obs[group_key]
+        v_str = str(value_raw).strip()
+        mask = None
+        try:
+            # If the series is numeric, try numeric compare first to avoid string roundtrip issues.
+            if np.issubdtype(getattr(s, "dtype", object), np.number):
+                try:
+                    if "." in v_str:
+                        v_num: Any = float(v_str)
+                    else:
+                        v_num = int(v_str)
+                    mask = (s == v_num)
+                except Exception:
+                    mask = None
+        except Exception:
+            mask = None
+
+        if mask is None:
+            try:
+                mask = (s.astype(str) == v_str)
+            except Exception:
+                mask = (s == v_str)
+
+        _subset_adata_inplace(adata, mask)
         return
 
     if spec_id == "scanpy.pp.scrublet":
@@ -1015,6 +1100,13 @@ def _run_module(
 
 def list_modules() -> List[Dict[str, Any]]:
     return [
+        {
+            "id": "custom.select_group",
+            "group": "custom",
+            "namespace": "custom",
+            "title": "Select Group",
+            "scanpyQualname": "custom.select_group",
+        },
         {
             "id": "scanpy.pp.filter_cells",
             "group": "pp",

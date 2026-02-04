@@ -4,11 +4,13 @@ import CoreGraphics
 enum ModuleGroup: String, Codable, CaseIterable {
     case pp
     case tl
+    case custom
 
     var title: String {
         switch self {
         case .pp: return "Preprocessing"
         case .tl: return "Tools"
+        case .custom: return "Custom"
         }
     }
 
@@ -18,6 +20,7 @@ enum ModuleGroup: String, Codable, CaseIterable {
         switch self {
         case .pp: return "#2D6CDF"
         case .tl: return "#1F8A70"
+        case .custom: return "#F97316"
         }
     }
 }
