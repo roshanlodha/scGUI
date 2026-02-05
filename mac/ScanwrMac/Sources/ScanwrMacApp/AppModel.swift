@@ -242,6 +242,37 @@ final class AppModel: ObservableObject {
         return try await rpc.call(method: "plot_custom", params: req)
     }
 
+    // MARK: CellTypist
+
+    struct CelltypistModelsResult: Codable, Hashable {
+        var ok: Bool?
+        var error: String?
+        var models: [String]
+        var localModels: [String]?
+        var modelsPath: String
+    }
+
+    func celltypistListModels() async -> CelltypistModelsResult? {
+        await ensureBackendStarted()
+        do {
+            return try await rpc.call(method: "celltypist_list_models", params: [:])
+        } catch {
+            appendLog("celltypist_list_models ERROR: \(error)")
+            return nil
+        }
+    }
+
+    func celltypistDownloadModels(forceUpdate: Bool = true) async -> CelltypistModelsResult? {
+        await ensureBackendStarted()
+        struct Params: Codable { var forceUpdate: Bool }
+        do {
+            return try await rpc.call(method: "celltypist_download_models", params: Params(forceUpdate: forceUpdate))
+        } catch {
+            appendLog("celltypist_download_models ERROR: \(error)")
+            return nil
+        }
+    }
+
     // MARK: Project open/create/close + recents
 
     func loadRecents() {

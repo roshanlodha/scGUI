@@ -141,8 +141,219 @@ private struct NodeInspectorContent: View {
             RankGenesGroupsInspector(params: $params)
         } else if specId == "custom.select_group" {
             SelectGroupInspector(params: $params)
+        } else if specId == "custom.annotate" {
+            AnnotateInspector(params: $params)
         } else {
             GenericParamsInspector(params: $params)
+        }
+    }
+}
+
+private struct AnnotateInspector: View {
+    @EnvironmentObject private var model: AppModel
+    @Binding var params: [String: JSONValue]
+
+    private enum Mode: String, CaseIterable, Identifiable {
+        case bestMatch = "best match"
+        case probMatch = "prob match"
+
+        var id: String { rawValue }
+    }
+
+    @State private var isLoadingModels: Bool = false
+    @State private var availableModels: [String] = []
+    @State private var localModels: Set<String> = []
+    @State private var modelsPath: String = ""
+    @State private var modelError: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Parameters").font(.subheadline).bold()
+            Text("Annotate cells using CellTypist. Output is written to `adata.obs[\"annotation\"]`.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            GroupBox("Model") {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 10) {
+                        LabeledContent("model") {
+                            Picker("", selection: bindingModelSelection()) {
+                                if availableModels.isEmpty {
+                                    Text(isLoadingModels ? "Loading…" : "No models").tag("__custom__")
+                                } else {
+                                    ForEach(availableModels, id: \.self) { m in
+                                        Text(m).tag(m)
+                                    }
+                                    Divider()
+                                    Text("Custom path…").tag("__custom__")
+                                }
+                            }
+                            .frame(width: 280)
+                        }
+
+                        Button {
+                            Task { await refreshModels(forceUpdate: false) }
+                        } label: {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                        .buttonStyle(.borderless)
+                        .disabled(isLoadingModels)
+                        .help("Refresh local model list")
+
+                        Button("Download latest") {
+                            Task { await refreshModels(forceUpdate: true) }
+                        }
+                        .disabled(isLoadingModels)
+                        .help("Downloads CellTypist models (requires internet)")
+
+                        if isLoadingModels { ProgressView().controlSize(.small) }
+                    }
+
+                    if bindingModelSelection().wrappedValue == "__custom__" {
+                        LabeledContent("model path") {
+                            TextField("", text: bindingString("model"))
+                                .frame(width: 360)
+                        }
+                    }
+
+                    if let err = modelError, !err.isEmpty {
+                        Text(err)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                            .textSelection(.enabled)
+                    } else {
+                        let selected = (params["model"]?.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !selected.isEmpty, bindingModelSelection().wrappedValue != "__custom__", !localModels.contains(selected) {
+                            Text("Model not installed yet. It will auto-download when you run (requires internet), or click “Download latest”.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    if !modelsPath.isEmpty {
+                        let installedCount = localModels.count
+                        Text("Models folder: \(modelsPath) (\(installedCount) installed)")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
+                }
+                .padding(6)
+            }
+
+            LabeledContent("mode") {
+                Picker("", selection: bindingMode()) {
+                    ForEach(Mode.allCases) { m in
+                        Text(m.rawValue).tag(m.rawValue)
+                    }
+                }
+                .frame(width: 220)
+            }
+
+            LabeledContent("p_thres (prob match)") {
+                TextField("", text: bindingNumberString("p_thres", default: "0.5"))
+                    .frame(width: 120)
+            }
+
+            Toggle("majority_voting", isOn: bindingBool("majority_voting", default: true))
+
+            LabeledContent("over_clustering (obs key)") {
+                TextField("", text: bindingString("over_clustering"))
+                    .frame(width: 220)
+            }
+
+            LabeledContent("min_prop") {
+                TextField("", text: bindingNumberString("min_prop", default: "0"))
+                    .frame(width: 120)
+            }
+
+            Toggle("preprocess (normalize+log1p on error)", isOn: bindingBool("preprocess", default: false))
+        }
+        .task {
+            if availableModels.isEmpty, !isLoadingModels {
+                await refreshModels(forceUpdate: false)
+            }
+        }
+    }
+
+    private func bindingString(_ key: String, default def: String = "") -> Binding<String> {
+        Binding<String>(
+            get: { params[key]?.stringValue ?? def },
+            set: { params[key] = .string($0) }
+        )
+    }
+
+    private func bindingNumberString(_ key: String, default def: String) -> Binding<String> {
+        Binding<String>(
+            get: {
+                if let n = params[key]?.doubleValue {
+                    if n.rounded() == n { return String(Int(n)) }
+                    return String(n)
+                }
+                return params[key]?.stringValue ?? def
+            },
+            set: { params[key] = .string($0) }
+        )
+    }
+
+    private func bindingBool(_ key: String, default def: Bool) -> Binding<Bool> {
+        Binding<Bool>(
+            get: { params[key]?.boolValue ?? def },
+            set: { params[key] = .bool($0) }
+        )
+    }
+
+    private func bindingMode() -> Binding<String> {
+        Binding<String>(
+            get: {
+                let raw = params["mode"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "best match"
+                return Mode.allCases.map(\.rawValue).contains(raw) ? raw : "best match"
+            },
+            set: { params["mode"] = .string($0) }
+        )
+    }
+
+    private func bindingModelSelection() -> Binding<String> {
+        Binding<String>(
+            get: {
+                let raw = (params["model"]?.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                if availableModels.contains(raw) { return raw }
+                return "__custom__"
+            },
+            set: { sel in
+                if sel == "__custom__" {
+                    if params["model"] == nil {
+                        params["model"] = .string("")
+                    }
+                } else {
+                    params["model"] = .string(sel)
+                }
+            }
+        )
+    }
+
+    private func refreshModels(forceUpdate: Bool) async {
+        isLoadingModels = true
+        defer { isLoadingModels = false }
+        let res = forceUpdate
+            ? await model.celltypistDownloadModels(forceUpdate: true)
+            : await model.celltypistListModels()
+
+        availableModels = res?.models ?? []
+        localModels = Set(res?.localModels ?? [])
+        modelsPath = res?.modelsPath ?? ""
+        modelError = res?.ok == false ? (res?.error ?? "Download failed") : nil
+
+        // If the current model is empty and we have options, pick a sensible default.
+        let current = (params["model"]?.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if current.isEmpty {
+            if localModels.contains("Immune_All_Low.pkl") {
+                params["model"] = .string("Immune_All_Low.pkl")
+            } else if let firstInstalled = res?.localModels?.first {
+                params["model"] = .string(firstInstalled)
+            } else if let first = availableModels.first {
+                params["model"] = .string(first)
+            }
         }
     }
 }

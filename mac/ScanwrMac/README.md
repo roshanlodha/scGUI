@@ -9,6 +9,7 @@ scGUI, formerly scAnWr, is a native SwiftUI macOS front-end that talks to a Pyth
 - The Pipeline panel includes a **Cohort (concat)** toggle to switch between concatenated cohort analysis and per-sample execution.
 - The Welcome screen includes buttons for Settings (verbosity slider) and clearing app cache.
 - Custom modules are exposed as `custom.<module>` (orange badge in the UI). `custom.select_group` filters cells by `adata.obs[group] == value` (e.g. `group=leiden`, `value=3` keeps cluster "3").
+- CellTypist annotation (`custom.annotate`) can run fully offline if you bundle the prebuilt CellTypist `.pkl` models into the app (see Packaging).
 
 ## Run (development)
 
@@ -73,6 +74,11 @@ export SCANWR_PY_MODE="venv"
 
 ```bash
 cd mac/ScanwrMac
+# Optional (recommended): bundle CellTypist models so end users can annotate offline.
+# 1) Download models into some folder (requires internet):
+#    CELLTYPIST_FOLDER=/tmp/celltypist_models $SCANWR_PYTHON -c "from celltypist import models; models.download_models(force_update=True); print(models.models_path)"
+# 2) Point make_app.sh at the directory that contains the `.pkl` files:
+#    export SCANWR_CELLTYPIST_MODELS_DIR="/tmp/celltypist_models/data/models"
 ./scripts/make_app.sh
 ```
 

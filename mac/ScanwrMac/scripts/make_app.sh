@@ -65,6 +65,101 @@ rm -rf "$RES/python"
 mkdir -p "$RES"
 ditto --noqtn "$PY_RUNTIME_DIR" "$RES/python"
 
+# Bundle CellTypist models into the app so end users can annotate offline.
+# Priority:
+# 1) SCANWR_CELLTYPIST_MODELS_DIR: directory that contains .pkl files (or has data/models/)
+# 2) Otherwise, download models using the bundled Python runtime (requires internet).
+#
+# If you want to skip bundling, set SCANWR_SKIP_CELLTYPIST_MODELS=1.
+# If you want to allow packaging to proceed without models, set SCANWR_REQUIRE_CELLTYPIST_MODELS=0.
+SKIP_CELLTYPIST_MODELS="${SCANWR_SKIP_CELLTYPIST_MODELS:-0}"
+REQUIRE_CELLTYPIST_MODELS="${SCANWR_REQUIRE_CELLTYPIST_MODELS:-1}"
+CELLTYPIST_MODELS_DIR="${SCANWR_CELLTYPIST_MODELS_DIR:-}"
+
+_bundle_celltypist_from_dir() {
+  local src_dir="$1"
+  if [[ ! -d "$src_dir" ]]; then
+    return 1
+  fi
+  if ! ls -1 "$src_dir"/*.pkl >/dev/null 2>&1; then
+    return 1
+  fi
+  echo "Bundling CellTypist models from: $src_dir"
+  rm -rf "$RES/celltypist_models"
+  mkdir -p "$RES/celltypist_models"
+  ditto --noqtn "$src_dir" "$RES/celltypist_models"
+  # Ensure there is at least one .pkl in the app bundle.
+  ls -1 "$RES/celltypist_models"/*.pkl >/dev/null 2>&1
+}
+
+if [[ "$SKIP_CELLTYPIST_MODELS" != "1" ]]; then
+  SRC=""
+  if [[ -n "$CELLTYPIST_MODELS_DIR" ]]; then
+    if [[ -d "$CELLTYPIST_MODELS_DIR/data/models" ]] && ls -1 "$CELLTYPIST_MODELS_DIR/data/models"/*.pkl >/dev/null 2>&1; then
+      SRC="$CELLTYPIST_MODELS_DIR/data/models"
+    else
+      SRC="$CELLTYPIST_MODELS_DIR"
+    fi
+
+    if ! _bundle_celltypist_from_dir "$SRC"; then
+      echo "WARN: SCANWR_CELLTYPIST_MODELS_DIR provided but no .pkl models found: $CELLTYPIST_MODELS_DIR" >&2
+      SRC=""
+    fi
+  fi
+
+  if [[ -z "$SRC" ]]; then
+    EMBED_PY="$RES/python/bin/python3"
+    if [[ -x "$EMBED_PY" ]]; then
+      echo "Downloading CellTypist models using bundled Python (force_update=True)…"
+      TMP_CT="$(mktemp -d "${TMPDIR:-/tmp}/scanwr-celltypist.XXXXXX")"
+      # Ensure CellTypist writes into a staging dir we control.
+      export CELLTYPIST_FOLDER="$TMP_CT/celltypist"
+      export MPLBACKEND="Agg"
+      export MPLCONFIGDIR="$TMP_CT/mpl"
+      export XDG_CACHE_HOME="$TMP_CT/xdg"
+      export NUMBA_CACHE_DIR="$TMP_CT/numba"
+      mkdir -p "$CELLTYPIST_FOLDER" "$MPLCONFIGDIR" "$XDG_CACHE_HOME" "$NUMBA_CACHE_DIR" >/dev/null 2>&1 || true
+
+      set +e
+      DL_OUT="$("$EMBED_PY" - <<'PY'
+from celltypist import models
+models.download_models(force_update=True)
+print(models.models_path)
+PY
+)"
+      DL_STATUS=$?
+      set -e
+
+      if [[ "$DL_STATUS" -eq 0 ]]; then
+        MODELS_PATH="$(printf '%s\n' "$DL_OUT" | tail -n 1)"
+        if _bundle_celltypist_from_dir "$MODELS_PATH"; then
+          echo "OK: Bundled CellTypist models."
+        else
+          echo "WARN: CellTypist download succeeded but no .pkl found at: $MODELS_PATH" >&2
+          if [[ "$REQUIRE_CELLTYPIST_MODELS" == "1" ]]; then
+            echo "ERROR: Required CellTypist models missing (set SCANWR_REQUIRE_CELLTYPIST_MODELS=0 to continue)." >&2
+            exit 4
+          fi
+        fi
+      else
+        echo "WARN: Failed to download CellTypist models using bundled Python." >&2
+        echo "$DL_OUT" >&2
+        if [[ "$REQUIRE_CELLTYPIST_MODELS" == "1" ]]; then
+          echo "ERROR: Required CellTypist models missing." >&2
+          echo "Set SCANWR_CELLTYPIST_MODELS_DIR to a folder containing the .pkl files, or set SCANWR_REQUIRE_CELLTYPIST_MODELS=0 to continue." >&2
+          exit 4
+        fi
+      fi
+    else
+      echo "WARN: Bundled Python not executable; cannot download CellTypist models during packaging." >&2
+      if [[ "$REQUIRE_CELLTYPIST_MODELS" == "1" ]]; then
+        echo "ERROR: Required CellTypist models missing (set SCANWR_CELLTYPIST_MODELS_DIR, or set SCANWR_REQUIRE_CELLTYPIST_MODELS=0)." >&2
+        exit 4
+      fi
+    fi
+  fi
+fi
+
 # Minimal Info.plist
 cat > "$CONTENTS/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>

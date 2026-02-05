@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -16,6 +17,96 @@ def _set_safe_env() -> None:
     os.environ.setdefault("XDG_CACHE_HOME", tempfile.gettempdir())
     os.environ.setdefault("NUMBA_CACHE_DIR", tempfile.mkdtemp(prefix="scanwr-numba-"))
     os.environ.setdefault("PYTHONUNBUFFERED", "1")
+    os.environ.setdefault("CELLTYPIST_FOLDER", os.path.join(tempfile.gettempdir(), "celltypist"))
+
+
+def _celltypist_bundle_dir() -> Path | None:
+    raw = os.environ.get("SCANWR_CELLTYPIST_BUNDLE_DIR", "").strip()
+    if not raw:
+        return None
+    try:
+        p = Path(raw).expanduser().resolve()
+    except Exception:
+        return None
+    return p if p.exists() else None
+
+
+def _celltypist_bundle_models_dir(bundle_dir: Path) -> Path | None:
+    # Accept a few possible layouts:
+    # - <bundle_dir>/*.pkl
+    # - <bundle_dir>/models/*.pkl
+    # - <bundle_dir>/data/models/*.pkl
+    candidates = [
+        bundle_dir,
+        bundle_dir / "models",
+        bundle_dir / "data" / "models",
+    ]
+    for c in candidates:
+        try:
+            if c.is_dir() and any(x.name.endswith(".pkl") for x in c.iterdir()):
+                return c
+        except Exception:
+            continue
+    return None
+
+
+def _celltypist_sync_models_from_bundle() -> None:
+    """
+    Copy bundled CellTypist models into the writable CELLTYPIST_FOLDER cache.
+
+    The app bundle is typically read-only (codesigned), so we treat it as a source
+    and copy into `celltypist.models.models_path` if missing.
+    """
+    bundle_dir = _celltypist_bundle_dir()
+    if bundle_dir is None:
+        return
+    models_src = _celltypist_bundle_models_dir(bundle_dir)
+    if models_src is None:
+        return
+
+    try:
+        import celltypist  # noqa: F401
+        from celltypist import models as ct_models  # type: ignore
+    except Exception:
+        return
+
+    try:
+        dest_dir = Path(ct_models.models_path)
+        dest_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        return
+
+    try:
+        for src in models_src.iterdir():
+            if not src.name.endswith(".pkl"):
+                continue
+            dst = dest_dir / src.name
+            if dst.exists():
+                continue
+            try:
+                shutil.copy2(src, dst)
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+    # Copy models.json if present (optional, but useful to preserve model ordering/metadata).
+    try:
+        src_json: Path | None = None
+        for candidate in [
+            models_src / "models.json",
+            bundle_dir / "models.json",
+            bundle_dir / "data" / "models" / "models.json",
+        ]:
+            if candidate.exists():
+                src_json = candidate
+                break
+        if src_json is not None:
+            dst_json = dest_dir / "models.json"
+            if not dst_json.exists():
+                shutil.copy2(src_json, dst_json)
+    except Exception:
+        pass
 
 
 def _notify_log(message: str) -> None:
@@ -921,6 +1012,148 @@ def _run_module(
         _subset_adata_inplace(adata, mask)
         return
 
+    if spec_id == "custom.annotate":
+        import os
+        import tempfile
+        from pathlib import Path
+
+        def _is_pathlike(s: str) -> bool:
+            return ("/" in s) or ("\\" in s) or s.startswith("~")
+
+        cache_root: Path
+        try:
+            cache_root = (plots_dir.parent if plots_dir is not None else Path(tempfile.gettempdir())) / "celltypist"
+            cache_root.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            cache_root = Path(tempfile.gettempdir()) / "celltypist"
+            cache_root.mkdir(parents=True, exist_ok=True)
+
+        os.environ.setdefault("CELLTYPIST_FOLDER", str(cache_root))
+        mpl_dir = cache_root / "mplconfig"
+        os.environ.setdefault("MPLCONFIGDIR", str(mpl_dir))
+        try:
+            mpl_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+
+        model_raw = _opt_str("model")
+        obs_key = "annotation"
+        mode = _opt_str("mode") or "best match"
+        p_thres = _opt_float("p_thres")
+        majority_voting = _opt_bool("majority_voting", True)
+        over_clustering = _opt_str("over_clustering")
+        allow_download = True
+        min_prop = _opt_float("min_prop") or 0.0
+        preprocess = _opt_bool("preprocess", False)
+
+        import celltypist  # type: ignore
+        from celltypist import models as ct_models  # type: ignore
+
+        _celltypist_sync_models_from_bundle()
+
+        # Resolve model: either a local path, or a model filename inside CELLTYPIST_FOLDER.
+        model_to_use: str | None = model_raw
+        if model_to_use:
+            if _is_pathlike(model_to_use):
+                p = Path(model_to_use).expanduser()
+                if not p.exists():
+                    raise FileNotFoundError(f"custom.annotate: model path not found: {p}")
+                model_to_use = str(p.resolve())
+            else:
+                model_path = Path(ct_models.get_model_path(model_to_use))
+                if not model_path.exists():
+                    _celltypist_sync_models_from_bundle()
+                    model_path = Path(ct_models.get_model_path(model_to_use))
+                    if allow_download:
+                        ct_models.download_models(model=model_to_use)
+                    else:
+                        raise FileNotFoundError(
+                            f"custom.annotate: model '{model_to_use}' not found in {model_path.parent}. "
+                            "Bundle the .pkl models with the app, provide a local .pkl path (params.model), or set allow_download=true."
+                        )
+        else:
+            default_name = "Immune_All_Low.pkl"
+            default_path = Path(ct_models.get_model_path(default_name))
+            if default_path.exists():
+                model_to_use = default_name
+            elif allow_download:
+                ct_models.download_models(model=default_name)
+                model_to_use = default_name
+            else:
+                raise ValueError(
+                    "custom.annotate: missing required param 'model'. "
+                    "Provide a local .pkl path (recommended for offline use), or set allow_download=true."
+                )
+
+        def _run() -> Any:
+            return celltypist.annotate(
+                adata,
+                model=model_to_use,
+                mode=mode,
+                p_thres=(p_thres if p_thres is not None else 0.5),
+                majority_voting=majority_voting,
+                over_clustering=over_clustering,
+                min_prop=min_prop,
+            )
+
+        try:
+            res = _run()
+        except Exception as e:
+            msg = str(e)
+            if preprocess and ("Invalid expression matrix" in msg or "expect log1p normalized expression" in msg):
+                sc.pp.normalize_total(adata, target_sum=1e4)
+                sc.pp.log1p(adata)
+                res = _run()
+            else:
+                raise
+
+        # Write a single convenient column to obs, plus a confidence score column.
+        labels = res.predicted_labels
+        probs = res.probability_matrix
+        if majority_voting and "majority_voting" in getattr(labels, "columns", []):
+            out_labels = labels["majority_voting"]
+            try:
+                import pandas as pd  # type: ignore
+
+                conf = []
+                for idx, row in probs.iterrows():
+                    lab = out_labels.loc[idx]
+                    if lab in row.index:
+                        conf.append(float(row[lab]))
+                    else:
+                        conf.append(float(row.max()))
+                out_conf = pd.Series(conf, index=probs.index)
+            except Exception:
+                out_conf = probs.max(axis=1)
+        else:
+            out_labels = labels["predicted_labels"]
+            out_conf = probs.max(axis=1)
+
+        try:
+            adata.obs[obs_key] = out_labels.astype("category")
+        except Exception:
+            adata.obs[obs_key] = out_labels.astype(str)
+        try:
+            adata.obs[f"{obs_key}_conf"] = out_conf.values
+        except Exception:
+            adata.obs[f"{obs_key}_conf"] = out_conf
+
+        try:
+            if "scanwr" not in adata.uns or not isinstance(adata.uns.get("scanwr"), dict):
+                adata.uns["scanwr"] = {}
+            adata.uns["scanwr"]["celltypist"] = {
+                "model": model_to_use,
+                "mode": mode,
+                "p_thres": float(p_thres if p_thres is not None else 0.5),
+                "majority_voting": bool(majority_voting),
+                "over_clustering": over_clustering,
+                "min_prop": float(min_prop),
+                "obs_key": obs_key,
+            }
+        except Exception:
+            pass
+        return
+
     if spec_id == "scanpy.pp.scrublet":
         batch_key = _opt_str("batch_key")
         if batch_key is None:
@@ -1138,6 +1371,13 @@ def list_modules() -> List[Dict[str, Any]]:
             "scanpyQualname": "custom.select_group",
         },
         {
+            "id": "custom.annotate",
+            "group": "custom",
+            "namespace": "custom",
+            "title": "Annotate (CellTypist)",
+            "scanpyQualname": "custom.annotate",
+        },
+        {
             "id": "scanpy.pp.filter_cells",
             "group": "pp",
             "namespace": "core",
@@ -1222,6 +1462,100 @@ def list_modules() -> List[Dict[str, Any]]:
             "scanpyQualname": "scanpy.tl.rank_genes_groups",
         },
     ]
+
+
+def _celltypist_list_local_models() -> List[str]:
+    import celltypist  # noqa: F401
+    from celltypist import models as ct_models  # type: ignore
+
+    _celltypist_sync_models_from_bundle()
+    try:
+        items = [x for x in os.listdir(ct_models.models_path) if x.endswith(".pkl")]
+    except Exception:
+        items = []
+    items.sort(key=lambda s: s.lower())
+    return items
+
+
+def _celltypist_known_models() -> List[str]:
+    # Prefer the downloaded models.json if available, but fall back to the canonical
+    # set referenced in the CellTypist tutorial notebook.
+    fallback = [
+        "Immune_All_Low.pkl",
+        "Immune_All_High.pkl",
+        "Adult_Mouse_Gut.pkl",
+        "COVID19_Immune_Landscape.pkl",
+        "Cells_Fetal_Lung.pkl",
+        "Cells_Intestinal_Tract.pkl",
+        "Cells_Lung_Airway.pkl",
+        "Developing_Mouse_Brain.pkl",
+        "Healthy_COVID19_PBMC.pkl",
+        "Human_Lung_Atlas.pkl",
+        "Nuclei_Lung_Airway.pkl",
+        "Pan_Fetal_Human.pkl",
+    ]
+
+    try:
+        import celltypist  # noqa: F401
+        from celltypist import models as ct_models  # type: ignore
+
+        models_json_path = ct_models.get_model_path("models.json")
+        if os.path.exists(models_json_path):
+            with open(models_json_path, "r", encoding="utf-8") as f:
+                blob = json.load(f)
+            items = [m.get("filename", "") for m in (blob.get("models") or [])]
+            items = [x for x in items if isinstance(x, str) and x.endswith(".pkl")]
+            # Preserve order from models.json.
+            seen: set[str] = set()
+            out: List[str] = []
+            for x in items:
+                if x in seen:
+                    continue
+                seen.add(x)
+                out.append(x)
+            return out if out else fallback
+    except Exception:
+        pass
+    return fallback
+
+
+def celltypist_list_models() -> Dict[str, Any]:
+    import celltypist  # noqa: F401
+    from celltypist import models as ct_models  # type: ignore
+
+    _celltypist_sync_models_from_bundle()
+    local = _celltypist_list_local_models()
+    return {
+        "ok": True,
+        "models": _celltypist_known_models(),
+        "localModels": local,
+        "modelsPath": str(ct_models.models_path),
+    }
+
+
+def celltypist_download_models(force_update: bool = True) -> Dict[str, Any]:
+    import celltypist  # noqa: F401
+    from celltypist import models as ct_models  # type: ignore
+
+    try:
+        _celltypist_sync_models_from_bundle()
+        ct_models.download_models(force_update=bool(force_update))
+        local = _celltypist_list_local_models()
+        return {
+            "ok": True,
+            "models": _celltypist_known_models(),
+            "localModels": local,
+            "modelsPath": str(ct_models.models_path),
+        }
+    except Exception as e:
+        local = _celltypist_list_local_models()
+        return {
+            "ok": False,
+            "error": str(e),
+            "models": _celltypist_known_models(),
+            "localModels": local,
+            "modelsPath": str(ct_models.models_path),
+        }
 
 
 def _sanitize_filename(s: str) -> str:
@@ -1722,6 +2056,10 @@ def _handle(method: str, params: Any) -> Any:
         return plot_violin(params=params)
     if method == "plot_custom":
         return plot_custom(params=params)
+    if method == "celltypist_list_models":
+        return celltypist_list_models()
+    if method == "celltypist_download_models":
+        return celltypist_download_models(force_update=bool(params.get("forceUpdate", True)))
     if method == "run_pipeline":
         # New API: per-sample raw input paths
         if "samples" in params:

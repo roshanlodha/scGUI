@@ -164,6 +164,10 @@ struct ExploreDataView: View {
     // Density styling
     @State private var densityFill: Bool = true
 
+    // Scatter styling
+    @State private var scatterPointSize: Int = 4
+    @State private var scatterAlpha: Double = 1.0
+
     // Output (internal)
     @State private var lastSVGURL: URL?
     @State private var plotError: String?
@@ -189,8 +193,8 @@ struct ExploreDataView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
-            if selectedData == .none, let first = model.samples.first?.sample {
-                selectedData = .sample(first)
+            if selectedData == .none {
+                selectedData = .cohort
             }
             Task { await loadInspectIfPossible() }
         }
@@ -291,18 +295,47 @@ struct ExploreDataView: View {
                 if let inspect {
                     switch plotType {
                     case .scatter:
-                        HStack(spacing: 10) {
-                            keyPicker("x", selection: $xRef, options: xOptions(inspect: inspect))
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack(spacing: 10) {
+                                keyPicker("x", selection: $xRef, options: xOptions(inspect: inspect))
+                                    .frame(maxWidth: .infinity)
+                                keyPicker("y", selection: $yRef, options: yOptions(inspect: inspect))
+                                    .frame(maxWidth: .infinity)
+                                keyPicker(
+                                    "color",
+                                    selection: $colorRef,
+                                    options: colorOptions(inspect: inspect),
+                                    allowNone: true
+                                )
                                 .frame(maxWidth: .infinity)
-                            keyPicker("y", selection: $yRef, options: yOptions(inspect: inspect))
-                                .frame(maxWidth: .infinity)
-                            keyPicker(
-                                "color",
-                                selection: $colorRef,
-                                options: colorOptions(inspect: inspect),
-                                allowNone: true
-                            )
-                            .frame(maxWidth: .infinity)
+                            }
+
+                            HStack(spacing: 10) {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text("point size")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                    Stepper(value: $scatterPointSize, in: 1...9) {
+                                        Text("\(scatterPointSize)")
+                                            .monospacedDigit()
+                                    }
+                                    .frame(width: 160, alignment: .leading)
+                                }
+
+                                VStack(alignment: .leading, spacing: 6) {
+                                    HStack {
+                                        Text("alpha")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                        Spacer()
+                                        Text("\(scatterAlpha, specifier: "%.2f")")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                            .monospacedDigit()
+                                    }
+                                    Slider(value: $scatterAlpha, in: 0...1, step: 0.01)
+                                }
+                            }
                         }
 
                     case .violin, .box:
@@ -679,8 +712,8 @@ struct ExploreDataView: View {
             xLabel: xLabel,
             yLabel: yLabel,
             xTickRotation: xTickRotationDeg > 0 ? xTickRotationDeg : nil,
-            pointSize: nil,
-            alpha: nil,
+            pointSize: (plotType == .scatter ? Double(scatterPointSize) : nil),
+            alpha: (plotType == .scatter ? scatterAlpha : nil),
             densityFill: (plotType == .density ? densityFill : nil),
             outputPath: out
         )

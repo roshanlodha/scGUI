@@ -106,6 +106,19 @@ final class PythonRPCClient {
             env.setdefault("MPLCONFIGDIR", cacheBase.appendingPathComponent("mpl").path)
             env.setdefault("XDG_CACHE_HOME", cacheBase.appendingPathComponent("xdg").path)
             env.setdefault("NUMBA_CACHE_DIR", cacheBase.appendingPathComponent("numba").path)
+            env.setdefault("CELLTYPIST_FOLDER", cacheBase.appendingPathComponent("celltypist").path)
+        }
+        if let base = Bundle.main.resourceURL {
+            let bundled = base.appendingPathComponent("celltypist_models", isDirectory: true)
+            if FileManager.default.fileExists(atPath: bundled.path) {
+                env.setdefault("SCANWR_CELLTYPIST_BUNDLE_DIR", bundled.path)
+            }
+        }
+        if let base = Bundle.module.resourceURL {
+            let bundled = base.appendingPathComponent("celltypist_models", isDirectory: true)
+            if FileManager.default.fileExists(atPath: bundled.path) {
+                env.setdefault("SCANWR_CELLTYPIST_BUNDLE_DIR", bundled.path)
+            }
         }
         p.environment = env
 
