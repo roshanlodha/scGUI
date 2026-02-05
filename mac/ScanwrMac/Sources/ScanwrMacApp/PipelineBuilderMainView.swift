@@ -56,23 +56,6 @@ struct PipelineBuilderMainView: View {
                 .buttonStyle(.bordered)
                 .disabled(!model.hasProject)
 
-                Toggle("Combine Samples", isOn: Binding<Bool>(
-                    get: { model.analysisMode == .concat },
-                    set: { model.analysisMode = $0 ? .concat : .perSample }
-                ))
-                .toggleStyle(.switch)
-                .disabled(model.isRunning)
-
-                Button(role: .destructive) {
-                    model.nodes = []
-                    model.links = []
-                    model.selectedNodeId = nil
-                } label: {
-                    Label("Clear", systemImage: "trash")
-                }
-                .buttonStyle(.bordered)
-                .disabled(model.nodes.isEmpty || model.isRunning)
-
                 if model.isRunning {
                     Button(role: .destructive) {
                         Task { await model.stopRun() }

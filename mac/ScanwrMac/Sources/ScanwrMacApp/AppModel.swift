@@ -44,6 +44,9 @@ final class AppModel: ObservableObject {
     @Published var analysisMode: AnalysisMode = .concat {
         didSet { UserDefaults.standard.set(analysisMode.rawValue, forKey: "scgui.analysisMode") }
     }
+    @Published var forceRerun: Bool = false {
+        didSet { UserDefaults.standard.set(forceRerun, forKey: "scgui.pipelineBuilder.forceRerun") }
+    }
     @Published var pipelineBuilderShowConsole: Bool = false {
         didSet { UserDefaults.standard.set(pipelineBuilderShowConsole, forKey: "scgui.pipelineBuilder.showConsole") }
     }
@@ -130,6 +133,7 @@ final class AppModel: ObservableObject {
             analysisMode = .concat
         }
 
+        forceRerun = UserDefaults.standard.bool(forKey: "scgui.pipelineBuilder.forceRerun")
         pipelineBuilderShowConsole = UserDefaults.standard.bool(forKey: "scgui.pipelineBuilder.showConsole")
     }
 
@@ -695,6 +699,7 @@ final class AppModel: ObservableObject {
             var samples: [SampleMetadata]
             var steps: [PipelineStep]
             var analysisMode: String
+            var forceRerun: Bool
         }
         struct PipelineStep: Codable {
             var specId: String
@@ -711,7 +716,8 @@ final class AppModel: ObservableObject {
                     projectName: "",
                     samples: samples,
                     steps: steps,
-                    analysisMode: analysisMode.rawValue
+                    analysisMode: analysisMode.rawValue,
+                    forceRerun: forceRerun
                 )
             )
             if Task.isCancelled { throw CancellationError() }

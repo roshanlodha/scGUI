@@ -1324,6 +1324,7 @@ def run_pipeline_multi(
     steps: List[Dict[str, Any]],
     *,
     analysis_mode: str | None = None,
+    force_rerun: bool = False,
 ) -> Dict[str, Any]:
     import anndata as ad  # local import after env set
 
@@ -1366,6 +1367,8 @@ def run_pipeline_multi(
         raise ValueError("analysis_mode must be one of: concat, per_sample")
 
     requested_sigs = [_step_sig(s) for s in steps]
+    if force_rerun:
+        _notify_log("Force rerun enabled: ignoring cached checkpoints")
 
     # v0.2.x behavior retained for debugging/back-compat.
     if analysis_mode == "per_sample":
@@ -1409,6 +1412,8 @@ def run_pipeline_multi(
 
             cached_input_sha, cached_sigs = _load_cached_prefix()
             if cached_input_sha != input_sha:
+                cached_sigs = []
+            if force_rerun:
                 cached_sigs = []
 
             prefix_len = 0
@@ -1524,6 +1529,8 @@ def run_pipeline_multi(
 
     cached_input_sha, cached_sigs = _load_cached_prefix()
     if cached_input_sha != input_sha:
+        cached_sigs = []
+    if force_rerun:
         cached_sigs = []
 
     prefix_len = 0
@@ -1724,6 +1731,7 @@ def _handle(method: str, params: Any) -> Any:
                 samples=params["samples"],
                 steps=params["steps"],
                 analysis_mode=params.get("analysisMode", None),
+                force_rerun=bool(params.get("forceRerun", False)),
             )
         # Legacy (kept for compatibility during iteration)
         return run_pipeline(input_path=params["inputPath"], output_dir=params["outputDir"], steps=params["steps"])

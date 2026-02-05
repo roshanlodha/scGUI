@@ -15,6 +15,34 @@ struct ModulePaletteSidebar: View {
             TextField("Search…", text: $query)
                 .textFieldStyle(.roundedBorder)
 
+            modulesBody
+                .frame(maxHeight: .infinity)
+
+            GroupBox("Run Settings") {
+                VStack(alignment: .leading, spacing: 10) {
+                    ToggleRow(
+                        title: "Combine Samples",
+                        isOn: Binding<Bool>(
+                            get: { model.analysisMode == .concat },
+                            set: { model.analysisMode = $0 ? .concat : .perSample }
+                        )
+                    )
+
+                    ToggleRow(title: "Force Rerun", isOn: $model.forceRerun)
+                        .help("Ignores cached checkpoints and reruns from step 1.")
+                }
+                .padding(.top, 2)
+            }
+            .disabled(model.isRunning)
+        }
+        .padding(12)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .panelChrome()
+        .padding(10)
+    }
+
+    private var modulesBody: some View {
+        Group {
             if model.isLoadingModules {
                 VStack(spacing: 10) {
                     Spacer()
@@ -55,10 +83,6 @@ struct ModulePaletteSidebar: View {
                 .scrollContentBackground(.hidden)
             }
         }
-        .padding(12)
-        .frame(maxHeight: .infinity, alignment: .top)
-        .panelChrome()
-        .padding(10)
     }
 
     private func filtered(group: ModuleGroup) -> [ModuleSpec] {
@@ -70,6 +94,22 @@ struct ModulePaletteSidebar: View {
                 || spec.scanpyQualname.lowercased().contains(q)
                 || (spec.namespace ?? "").lowercased().contains(q)
         }
+    }
+}
+
+private struct ToggleRow: View {
+    var title: String
+    @Binding var isOn: Bool
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text(title)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Toggle("", isOn: $isOn)
+                .labelsHidden()
+                .toggleStyle(.switch)
+        }
+        .frame(maxWidth: .infinity)
     }
 }
 
