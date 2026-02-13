@@ -6,7 +6,7 @@ scGUI is a native macOS app (SwiftUI) for building and running single‑cell ana
 
 - **Metadata management**: add/import sample rows (`sample`, `group`, `path`, optional reader override).
 - **Pipeline builder**: drag & drop modules onto a canvas and connect them into a workflow.
-- **Multi-sample (cohort) analysis**: loads all samples, concatenates them, and runs the pipeline once with `adata.obs['sample']` and `adata.obs['group']` attached.
+- **Multi-sample (cohort) analysis**: controlled by a **Concat Samples** module (`scanwr.concat`) that can be moved in the pipeline.
 - **Incremental re-runs**: caches step signatures and resumes from checkpoints when possible.
 - **Visualization**: interactive plotting UI backed by seaborn/matplotlib; export plots as SVG.
 - **Project = a folder on disk**: scGUI projects are portable and easy to inspect/version.
@@ -37,7 +37,7 @@ When you run a multi-sample project, scGUI concatenates all samples into one Ann
 
 To find marker genes between groups, add **Rank Genes Groups** and set `groupby = group` (this runs `scanpy.tl.rank_genes_groups` and saves results into `adata.uns["rank_genes_groups"]`).
 
-You can switch between **Cohort (concat)** and **Per-sample** runs using the toggle at the top of the Pipeline panel.
+For multi-sample projects, the app inserts **Concat Samples** at the start of the pipeline by default; move it later to run earlier steps per-sample before concatenation.
 
 ## Release packaging
 

@@ -10,6 +10,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 
+CONCAT_SPEC_ID = "scanwr.concat"
+
+
 def _set_safe_env() -> None:
     # Scanpy pulls matplotlib/fontconfig; route caches to writable places.
     os.environ.setdefault("MPLBACKEND", "Agg")
@@ -860,6 +863,10 @@ def _run_module(
     }
     spec_id = legacy_to_scanpy.get(spec_id, spec_id)
 
+    # Pipeline-only "module": handled by run_pipeline_multi (it operates on multiple samples).
+    if spec_id == CONCAT_SPEC_ID:
+        return
+
     def _opt_int(key: str) -> Optional[int]:
         v = (params or {}).get(key)
         if v is None:
@@ -1364,6 +1371,13 @@ def _run_module(
 def list_modules() -> List[Dict[str, Any]]:
     return [
         {
+            "id": CONCAT_SPEC_ID,
+            "group": "custom",
+            "namespace": "core",
+            "title": "Concat Samples",
+            "scanpyQualname": CONCAT_SPEC_ID,
+        },
+        {
             "id": "custom.select_group",
             "group": "custom",
             "namespace": "custom",
@@ -1594,6 +1608,8 @@ def run_pipeline(input_path: str, output_dir: str, steps: List[Dict[str, Any]]) 
     _notify_log("Loading input .h5ad…")
     adata = ad.read_h5ad(str(in_path))
 
+    steps = [s for s in (steps or []) if str(s.get("specId")) != CONCAT_SPEC_ID]
+
     checkpoints: List[str] = []
     for i, step in enumerate(steps, start=1):
         spec_id = str(step.get("specId"))
@@ -1696,16 +1712,150 @@ def run_pipeline_multi(
         )
     meta_path.write_text("\n".join(lines) + "\n")
 
-    analysis_mode = (analysis_mode or "concat").strip().lower()
-    if analysis_mode not in ("concat", "per_sample"):
+    raw_steps: List[Dict[str, Any]] = list(steps or [])
+    concat_indices = [i for i, st in enumerate(raw_steps) if str(st.get("specId")) == CONCAT_SPEC_ID]
+    if len(concat_indices) > 1:
+        raise ValueError("Pipeline can include at most one scanwr.concat step")
+
+    # Legacy flag (UI no longer needs it). If explicitly requested, it overrides implicit concat insertion.
+    analysis_mode_norm: str | None = None
+    if analysis_mode is not None:
+        analysis_mode_norm = str(analysis_mode).strip().lower() or None
+    if analysis_mode_norm not in (None, "concat", "per_sample"):
         raise ValueError("analysis_mode must be one of: concat, per_sample")
 
-    requested_sigs = [_step_sig(s) for s in steps]
     if force_rerun:
         _notify_log("Force rerun enabled: ignoring cached checkpoints")
 
-    # v0.2.x behavior retained for debugging/back-compat.
-    if analysis_mode == "per_sample":
+    def _load_cached_prefix(path: Path) -> Tuple[str | None, List[Dict[str, Any]]]:
+        if not path.exists():
+            return None, []
+        try:
+            blob = json.loads(path.read_text())
+            if isinstance(blob, list):
+                return None, list(blob)
+            if isinstance(blob, dict):
+                return str(blob.get("inputSha256") or ""), list(blob.get("steps") or [])
+        except Exception:
+            return None, []
+        return None, []
+
+    def _write_cached_prefix(path: Path, input_sha: str, prefix: List[Dict[str, Any]]) -> None:
+        path.write_text(json.dumps({"inputSha256": input_sha, "steps": prefix}, indent=2, sort_keys=True))
+
+    def _run_steps_on_sample(
+        *,
+        sample: str,
+        group: str,
+        path: str,
+        reader_override: str,
+        steps_for_sample: List[Dict[str, Any]],
+        step_index_offset: int,
+        step_count_total: int,
+        progress_base: float,
+        progress_span: float,
+    ) -> Tuple[str, Any]:
+        checkpoint_h5ad = checkpoints_dir / f"{_sanitize_filename(sample)}.h5ad"
+        checkpoint_steps = history_dir / f"{_sanitize_filename(sample)}.json"
+
+        input_sha = _sha256_json(
+            {
+                "sample": sample,
+                "group": group,
+                "reader": reader_override,
+                "file": _file_input_sig(path),
+            }
+        )
+
+        requested_sigs = [_step_sig(s) for s in steps_for_sample]
+        cached_input_sha, cached_sigs = _load_cached_prefix(checkpoint_steps)
+        if cached_input_sha != input_sha:
+            cached_sigs = []
+        if force_rerun:
+            cached_sigs = []
+
+        prefix_len = 0
+        for a, b in zip(cached_sigs, requested_sigs):
+            if a == b:
+                prefix_len += 1
+            else:
+                break
+
+        if checkpoint_h5ad.exists() and (prefix_len > 0 or (cached_input_sha == input_sha and not requested_sigs)):
+            _notify_log(f"[{sample}] Cache hit: skipping {prefix_len}/{len(requested_sigs)} step(s)")
+            _notify_progress(
+                percent=progress_base,
+                message=f"{sample}: resuming from checkpoint",
+                sample=sample,
+                step_index=step_index_offset + prefix_len,
+                step_count=step_count_total,
+            )
+            adata = ad.read_h5ad(str(checkpoint_h5ad))
+            reader = reader_override or "auto"
+        else:
+            _notify_log(f"Reading {sample}…")
+            _notify_progress(
+                percent=progress_base,
+                message=f"{sample}: reading input",
+                sample=sample,
+                step_index=0,
+                step_count=step_count_total,
+            )
+            reader, adata = _read_with_reader(reader_override, path)
+            _write_cached_prefix(checkpoint_steps, input_sha, [])
+
+        if not steps_for_sample:
+            return reader, adata
+
+        try:
+            adata.var_names_make_unique()
+        except Exception:
+            pass
+        try:
+            adata.obs["sample"] = sample
+            adata.obs["group"] = group
+        except Exception:
+            pass
+        try:
+            names = list(getattr(adata, "obs_names", []))
+            prefix = f"{sample}_"
+            if names and not str(names[0]).startswith(prefix):
+                adata.obs_names = [f"{sample}_{str(x)}" for x in names]
+        except Exception:
+            pass
+
+        for i, step in enumerate(steps_for_sample, start=1):
+            if i <= prefix_len:
+                continue
+            spec_id = str(step.get("specId"))
+            if spec_id == CONCAT_SPEC_ID:
+                continue
+            params = step.get("params") or {}
+
+            frac = (i / max(1, len(steps_for_sample))) if steps_for_sample else 1.0
+            _notify_progress(
+                percent=min(1.0, max(0.0, progress_base + progress_span * frac)),
+                message=f"{sample}: {spec_id}",
+                sample=sample,
+                step_index=step_index_offset + i,
+                step_count=step_count_total,
+            )
+            _notify_log(f"[{sample}] Step {step_index_offset + i}/{step_count_total}: {spec_id}")
+            _run_module(adata, spec_id, params, plots_dir=plots_root, sample=sample)
+
+            _notify_log(f"[{sample}] Updating checkpoint.h5ad")
+            adata.write_h5ad(str(checkpoint_h5ad))
+            _write_cached_prefix(checkpoint_steps, input_sha, requested_sigs[:i])
+            adata = ad.read_h5ad(str(checkpoint_h5ad))
+
+        return reader, adata
+
+    def _run_per_sample_all(steps_all: List[Dict[str, Any]]) -> Dict[str, Any]:
+        # Per-sample execution (returns one output per sample). Ignores any scanwr.concat step.
+        steps_all = [s for s in steps_all if str(s.get("specId")) != CONCAT_SPEC_ID]
+        requested_sigs = [_step_sig(s) for s in steps_all]
+        step_count_total = len(steps_all)
+
         results: List[Dict[str, Any]] = []
         total_samples = max(1, len(samples))
         for s_idx, s in enumerate(samples, start=1):
@@ -1728,23 +1878,7 @@ def run_pipeline_multi(
                 }
             )
 
-            def _load_cached_prefix() -> Tuple[str | None, List[Dict[str, Any]]]:
-                if not checkpoint_steps.exists():
-                    return None, []
-                try:
-                    blob = json.loads(checkpoint_steps.read_text())
-                    if isinstance(blob, list):
-                        return None, list(blob)
-                    if isinstance(blob, dict):
-                        return str(blob.get("inputSha256") or ""), list(blob.get("steps") or [])
-                except Exception:
-                    return None, []
-                return None, []
-
-            def _write_cached_prefix(prefix: List[Dict[str, Any]]) -> None:
-                checkpoint_steps.write_text(json.dumps({"inputSha256": input_sha, "steps": prefix}, indent=2, sort_keys=True))
-
-            cached_input_sha, cached_sigs = _load_cached_prefix()
+            cached_input_sha, cached_sigs = _load_cached_prefix(checkpoint_steps)
             if cached_input_sha != input_sha:
                 cached_sigs = []
             if force_rerun:
@@ -1757,14 +1891,14 @@ def run_pipeline_multi(
                 else:
                     break
 
-            if prefix_len > 0 and checkpoint_h5ad.exists():
+            if checkpoint_h5ad.exists() and cached_input_sha == input_sha and not force_rerun:
                 _notify_log(f"[{sample}] Cache hit: skipping {prefix_len}/{len(requested_sigs)} step(s)")
                 _notify_progress(
                     percent=(s_idx - 1) / total_samples,
                     message=f"{sample}: resuming from checkpoint",
                     sample=sample,
                     step_index=prefix_len,
-                    step_count=len(requested_sigs),
+                    step_count=step_count_total,
                 )
                 adata = ad.read_h5ad(str(checkpoint_h5ad))
                 reader = reader_override or "auto"
@@ -1775,32 +1909,36 @@ def run_pipeline_multi(
                     message=f"{sample}: reading input",
                     sample=sample,
                     step_index=0,
-                    step_count=len(requested_sigs),
+                    step_count=step_count_total,
                 )
                 reader, adata = _read_with_reader(reader_override, path)
-                _write_cached_prefix([])
+                _write_cached_prefix(checkpoint_steps, input_sha, [])
 
             checkpoints: List[str] = []
-            for i, step in enumerate(steps, start=1):
+            if not steps_all and not checkpoint_h5ad.exists():
+                _notify_log(f"[{sample}] Writing checkpoint.h5ad")
+                adata.write_h5ad(str(checkpoint_h5ad))
+
+            for i, step in enumerate(steps_all, start=1):
                 if i <= prefix_len:
                     continue
                 spec_id = str(step.get("specId"))
                 params = step.get("params") or {}
 
-                overall = ((s_idx - 1) + (i / max(1, len(steps)))) / total_samples
+                overall = ((s_idx - 1) + (i / max(1, len(steps_all)))) / total_samples
                 _notify_progress(
                     percent=overall,
                     message=f"{sample}: {spec_id}",
                     sample=sample,
                     step_index=i,
-                    step_count=len(steps),
+                    step_count=step_count_total,
                 )
-                _notify_log(f"[{sample}] Step {i}/{len(steps)}: {spec_id}")
+                _notify_log(f"[{sample}] Step {i}/{step_count_total}: {spec_id}")
                 _run_module(adata, spec_id, params, plots_dir=plots_root, sample=sample)
 
                 _notify_log(f"[{sample}] Updating checkpoint.h5ad")
                 adata.write_h5ad(str(checkpoint_h5ad))
-                _write_cached_prefix(requested_sigs[:i])
+                _write_cached_prefix(checkpoint_steps, input_sha, requested_sigs[:i])
                 checkpoints.append(str(checkpoint_h5ad))
                 adata = ad.read_h5ad(str(checkpoint_h5ad))
 
@@ -1809,8 +1947,8 @@ def run_pipeline_multi(
                 percent=min(1.0, s_idx / total_samples),
                 message=f"{sample}: done",
                 sample=sample,
-                step_index=len(steps),
-                step_count=len(steps),
+                step_index=step_count_total,
+                step_count=step_count_total,
             )
 
             shape = list(getattr(adata, "shape", (0, 0)))
@@ -1829,203 +1967,241 @@ def run_pipeline_multi(
 
         return {"outputDir": str(project), "results": results}
 
-    # New behavior (v0.3.0): read all samples, annotate obs with sample+group, then concatenate and run once.
-    cohort_sample_label = "__cohort__"
-    checkpoint_h5ad = checkpoints_dir / "cohort.h5ad"
-    checkpoint_steps = history_dir / "cohort.json"
+    def _run_with_concat_module(pre_steps: List[Dict[str, Any]], post_steps: List[Dict[str, Any]], *, concat_is_implicit: bool) -> Dict[str, Any]:
+        # Cohort execution: apply pre_steps per-sample, concat, then apply post_steps once.
+        cohort_sample_label = "__cohort__"
+        checkpoint_h5ad = checkpoints_dir / "cohort.h5ad"
+        checkpoint_steps = history_dir / "cohort.json"
 
-    input_sig_parts: List[Dict[str, Any]] = []
-    for s in samples:
-        sample = str(s.get("sample", "")).strip()
-        group = str(s.get("group", "")).strip()
-        path = str(s.get("path", "")).strip()
-        reader_override = str(s.get("reader", "")).strip()
-        if not sample or not group or not path:
-            raise ValueError("Each sample must include sample, group, path")
-        input_sig_parts.append({"sample": sample, "group": group, "reader": reader_override, "file": _file_input_sig(path)})
-    input_sha = _sha256_json(input_sig_parts)
+        pre_steps = [s for s in pre_steps if str(s.get("specId")) != CONCAT_SPEC_ID]
+        post_steps = [s for s in post_steps if str(s.get("specId")) != CONCAT_SPEC_ID]
 
-    def _load_cached_prefix() -> Tuple[str | None, List[Dict[str, Any]]]:
-        if not checkpoint_steps.exists():
-            return None, []
-        try:
-            blob = json.loads(checkpoint_steps.read_text())
-            if isinstance(blob, list):
-                return None, list(blob)
-            if isinstance(blob, dict):
-                return str(blob.get("inputSha256") or ""), list(blob.get("steps") or [])
-        except Exception:
-            return None, []
-        return None, []
+        pre_sigs = [_step_sig(s) for s in pre_steps]
+        requested_sigs = [_step_sig(s) for s in post_steps]
 
-    def _write_cached_prefix(prefix: List[Dict[str, Any]]) -> None:
-        checkpoint_steps.write_text(json.dumps({"inputSha256": input_sha, "steps": prefix}, indent=2, sort_keys=True))
-
-    cached_input_sha, cached_sigs = _load_cached_prefix()
-    if cached_input_sha != input_sha:
-        cached_sigs = []
-    if force_rerun:
-        cached_sigs = []
-
-    prefix_len = 0
-    for a, b in zip(cached_sigs, requested_sigs):
-        if a == b:
-            prefix_len += 1
-        else:
-            break
-
-    if prefix_len > 0 and checkpoint_h5ad.exists():
-        _notify_log(f"[{cohort_sample_label}] Cache hit: skipping {prefix_len}/{len(requested_sigs)} step(s)")
-        _notify_progress(
-            percent=0.0,
-            message=f"{cohort_sample_label}: resuming from checkpoint",
-            sample=cohort_sample_label,
-            step_index=prefix_len,
-            step_count=len(requested_sigs),
-        )
-        adata = ad.read_h5ad(str(checkpoint_h5ad))
-    else:
-        _notify_log("Reading inputs…")
-        total_samples = max(1, len(samples))
-        adatas: List[Any] = []
-        readers_used: List[str] = []
-
-        for s_idx, s in enumerate(samples, start=1):
+        input_sig_parts: List[Dict[str, Any]] = []
+        for s in samples:
             sample = str(s.get("sample", "")).strip()
             group = str(s.get("group", "")).strip()
             path = str(s.get("path", "")).strip()
             reader_override = str(s.get("reader", "")).strip()
+            if not sample or not group or not path:
+                raise ValueError("Each sample must include sample, group, path")
+            input_sig_parts.append({"sample": sample, "group": group, "reader": reader_override, "file": _file_input_sig(path)})
 
+        input_sha = _sha256_json({"samples": input_sig_parts, "preSteps": pre_sigs})
+
+        cached_input_sha, cached_sigs = _load_cached_prefix(checkpoint_steps)
+        if cached_input_sha != input_sha:
+            cached_sigs = []
+        if force_rerun:
+            cached_sigs = []
+
+        prefix_len = 0
+        for a, b in zip(cached_sigs, requested_sigs):
+            if a == b:
+                prefix_len += 1
+            else:
+                break
+
+        step_count_total = len(pre_steps) + 1 + len(post_steps)
+
+        # If input SHA matches and cohort checkpoint exists, resume from it (even when prefix_len==0,
+        # which means the checkpoint is the raw concatenated cohort).
+        if checkpoint_h5ad.exists() and cached_input_sha == input_sha and not force_rerun:
+            _notify_log(f"[{cohort_sample_label}] Cache hit: skipping {prefix_len}/{len(requested_sigs)} post-concat step(s)")
             _notify_progress(
-                percent=(s_idx - 1) / total_samples * 0.15,
-                message=f"{sample}: reading input",
-                sample=sample,
-                step_index=0,
-                step_count=len(requested_sigs),
+                percent=0.0,
+                message=f"{cohort_sample_label}: resuming from checkpoint",
+                sample=cohort_sample_label,
+                step_index=len(pre_steps) + 1 + prefix_len,
+                step_count=step_count_total,
             )
-            _notify_log(f"Reading {sample}…")
-            reader, a = _read_with_reader(reader_override, path)
-            readers_used.append(reader)
+            adata = ad.read_h5ad(str(checkpoint_h5ad))
+        else:
+            _notify_log("Reading inputs…")
+            total_samples = max(1, len(samples))
+            adatas: List[Any] = []
+            readers_used: List[str] = []
 
+            pre_weight = 0.55 if pre_steps else 0.15
+            for s_idx, s in enumerate(samples, start=1):
+                sample = str(s.get("sample", "")).strip()
+                group = str(s.get("group", "")).strip()
+                path = str(s.get("path", "")).strip()
+                reader_override = str(s.get("reader", "")).strip()
+
+                base = (s_idx - 1) / total_samples * pre_weight
+                span = (1 / total_samples) * pre_weight
+
+                if pre_steps:
+                    reader, a = _run_steps_on_sample(
+                        sample=sample,
+                        group=group,
+                        path=path,
+                        reader_override=reader_override,
+                        steps_for_sample=pre_steps,
+                        step_index_offset=0,
+                        step_count_total=step_count_total,
+                        progress_base=base,
+                        progress_span=span,
+                    )
+                else:
+                    _notify_progress(
+                        percent=base,
+                        message=f"{sample}: reading input",
+                        sample=sample,
+                        step_index=0,
+                        step_count=step_count_total,
+                    )
+                    _notify_log(f"Reading {sample}…")
+                    reader, a = _read_with_reader(reader_override, path)
+
+                readers_used.append(reader)
+
+                try:
+                    a.var_names_make_unique()
+                except Exception:
+                    pass
+                try:
+                    a.obs["sample"] = sample
+                    a.obs["group"] = group
+                except Exception:
+                    pass
+                try:
+                    names = list(getattr(a, "obs_names", []))
+                    prefix = f"{sample}_"
+                    if names and not str(names[0]).startswith(prefix):
+                        a.obs_names = [f"{sample}_{str(x)}" for x in names]
+                except Exception:
+                    pass
+
+                adatas.append(a)
+
+            _notify_log("Concatenating samples…")
+            _notify_progress(
+                percent=pre_weight,
+                message=f"{cohort_sample_label}: concatenating",
+                sample=cohort_sample_label,
+                step_index=len(pre_steps) + 1,
+                step_count=step_count_total,
+            )
+
+            # Union of genes; fill missing values with 0 to preserve missing feature semantics.
+            adata = ad.concat(adatas, join="outer", merge="same", label=None, fill_value=0)
             try:
-                a.var_names_make_unique()
+                adata.obs_names_make_unique()
             except Exception:
                 pass
+
             try:
-                a.obs["sample"] = sample
-                a.obs["group"] = group
+                import pandas as pd  # type: ignore
+
+                for key in ("sample", "group"):
+                    if key in adata.obs.columns:
+                        adata.obs[key] = pd.Categorical(adata.obs[key])
             except Exception:
                 pass
+
             try:
-                a.obs_names = [f"{sample}_{str(x)}" for x in list(getattr(a, "obs_names", []))]
+                adata.uns.setdefault("scanwr", {})
+                sample_meta: Dict[str, Any] = {}
+                sample_order: List[str] = []
+                for item in input_sig_parts:
+                    sname = str(item.get("sample", "") or "")
+                    if not sname:
+                        continue
+                    sample_order.append(sname)
+                    sample_meta[sname] = {
+                        "group": str(item.get("group", "") or ""),
+                        "reader": str(item.get("reader", "") or ""),
+                        "path": str((item.get("file") or {}).get("path", "") or ""),
+                        "mtimeNs": int((item.get("file") or {}).get("mtimeNs", 0) or 0),
+                        "size": int((item.get("file") or {}).get("size", 0) or 0),
+                    }
+                adata.uns["scanwr"]["analysisMode"] = "concat"
+                adata.uns["scanwr"]["concatModule"] = {"specId": CONCAT_SPEC_ID, "implicit": bool(concat_is_implicit), "preSteps": len(pre_steps)}
+                adata.uns["scanwr"]["samplesOrder"] = sample_order
+                adata.uns["scanwr"]["samplesMeta"] = sample_meta
+                adata.uns["scanwr"]["inputSha256"] = input_sha
             except Exception:
                 pass
 
-            adatas.append(a)
+            # Persist raw cohort checkpoint to support cache resumes even when no post steps ran.
+            adata.write_h5ad(str(checkpoint_h5ad))
+            _write_cached_prefix(checkpoint_steps, input_sha, [])
+            prefix_len = 0
 
-        _notify_log("Concatenating samples…")
-        _notify_progress(percent=0.15, message=f"{cohort_sample_label}: concatenating", sample=cohort_sample_label, step_index=0, step_count=len(steps))
+        checkpoints: List[str] = []
+        for i, step in enumerate(post_steps, start=1):
+            if i <= prefix_len:
+                continue
+            spec_id = str(step.get("specId"))
+            params = step.get("params") or {}
 
-        # Union of genes; fill missing values with 0 to preserve missing feature semantics.
-        adata = ad.concat(adatas, join="outer", merge="same", label=None, fill_value=0)
-        try:
-            adata.obs_names_make_unique()
-        except Exception:
-            pass
+            # Overall progress: reserve 0..pre_weight for reading/pre/concat, then the rest for post steps.
+            pre_weight = 0.55 if pre_steps else 0.15
+            overall = pre_weight + (i / max(1, len(post_steps))) * (1.0 - pre_weight)
+            _notify_progress(
+                percent=overall,
+                message=f"{cohort_sample_label}: {spec_id}",
+                sample=cohort_sample_label,
+                step_index=len(pre_steps) + 1 + i,
+                step_count=step_count_total,
+            )
+            _notify_log(f"[{cohort_sample_label}] Step {len(pre_steps) + 1 + i}/{step_count_total}: {spec_id}")
+            _run_module(adata, spec_id, params, plots_dir=plots_root, sample=cohort_sample_label)
 
-        try:
-            import pandas as pd  # type: ignore
+            _notify_log(f"[{cohort_sample_label}] Updating checkpoint.h5ad")
+            adata.write_h5ad(str(checkpoint_h5ad))
+            _write_cached_prefix(checkpoint_steps, input_sha, requested_sigs[:i])
+            checkpoints.append(str(checkpoint_h5ad))
+            adata = ad.read_h5ad(str(checkpoint_h5ad))
 
-            for key in ("sample", "group"):
-                if key in adata.obs.columns:
-                    adata.obs[key] = pd.Categorical(adata.obs[key])
-        except Exception:
-            pass
-
-        try:
-            adata.uns.setdefault("scanwr", {})
-            # Avoid storing complex objects (e.g. list[dict]) in `.uns` as it can break H5AD writing.
-            # Keep this strictly JSON-serializable primitives in dict form.
-            sample_meta: Dict[str, Any] = {}
-            sample_order: List[str] = []
-            for item in input_sig_parts:
-                sname = str(item.get("sample", "") or "")
-                if not sname:
-                    continue
-                sample_order.append(sname)
-                sample_meta[sname] = {
-                    "group": str(item.get("group", "") or ""),
-                    "reader": str(item.get("reader", "") or ""),
-                    "path": str((item.get("file") or {}).get("path", "") or ""),
-                    "mtimeNs": int((item.get("file") or {}).get("mtimeNs", 0) or 0),
-                    "size": int((item.get("file") or {}).get("size", 0) or 0),
-                }
-            adata.uns["scanwr"]["analysisMode"] = "concat"
-            adata.uns["scanwr"]["samplesOrder"] = sample_order
-            adata.uns["scanwr"]["samplesMeta"] = sample_meta
-            adata.uns["scanwr"]["inputSha256"] = input_sha
-        except Exception:
-            pass
-
-        _write_cached_prefix([])
-
-    checkpoints: List[str] = []
-    for i, step in enumerate(steps, start=1):
-        if i <= prefix_len:
-            continue
-        spec_id = str(step.get("specId"))
-        params = step.get("params") or {}
-
-        overall = 0.15 + (i / max(1, len(steps))) * 0.85
+        final_path = checkpoint_h5ad
         _notify_progress(
-            percent=overall,
-            message=f"{cohort_sample_label}: {spec_id}",
+            percent=1.0,
+            message=f"{cohort_sample_label}: done",
             sample=cohort_sample_label,
-            step_index=i,
-            step_count=len(steps),
+            step_index=step_count_total,
+            step_count=step_count_total,
         )
-        _notify_log(f"[{cohort_sample_label}] Step {i}/{len(steps)}: {spec_id}")
-        _run_module(adata, spec_id, params, plots_dir=plots_root, sample=cohort_sample_label)
 
-        _notify_log(f"[{cohort_sample_label}] Updating checkpoint.h5ad")
-        adata.write_h5ad(str(checkpoint_h5ad))
-        _write_cached_prefix(requested_sigs[:i])
-        checkpoints.append(str(checkpoint_h5ad))
-        adata = ad.read_h5ad(str(checkpoint_h5ad))
-
-    final_path = checkpoint_h5ad
-    _notify_progress(
-        percent=1.0,
-        message=f"{cohort_sample_label}: done",
-        sample=cohort_sample_label,
-        step_index=len(steps),
-        step_count=len(steps),
-    )
-
-    reader_summary = "auto"
-    try:
-        # If users override different readers per sample, just surface "mixed".
-        overrides = [str(s.get("reader", "")).strip() for s in samples]
-        reader_summary = "mixed" if len(set([x for x in overrides if x])) > 1 else (overrides[0] or "auto")
-    except Exception:
         reader_summary = "auto"
+        try:
+            overrides = [str(s.get("reader", "")).strip() for s in samples]
+            reader_summary = "mixed" if len(set([x for x in overrides if x])) > 1 else (overrides[0] or "auto")
+        except Exception:
+            reader_summary = "auto"
 
-    shape = list(getattr(adata, "shape", (0, 0)))
-    return {
-        "outputDir": str(project),
-        "results": [
-            {
-                "sample": cohort_sample_label,
-                "group": "cohort",
-                "path": "concat",
-                "reader": reader_summary,
-                "outputDir": str(project),
-                "checkpoints": checkpoints,
-                "finalPath": str(final_path),
-                "shape": shape,
-            }
-        ],
-    }
+        shape = list(getattr(adata, "shape", (0, 0)))
+        return {
+            "outputDir": str(project),
+            "results": [
+                {
+                    "sample": cohort_sample_label,
+                    "group": "cohort",
+                    "path": "concat",
+                    "reader": reader_summary,
+                    "outputDir": str(project),
+                    "checkpoints": checkpoints,
+                    "finalPath": str(final_path),
+                    "shape": shape,
+                }
+            ],
+        }
+
+    # Explicit concat module in the pipeline: split execution around it.
+    if concat_indices:
+        concat_idx = concat_indices[0]
+        return _run_with_concat_module(raw_steps[:concat_idx], raw_steps[concat_idx + 1 :], concat_is_implicit=False)
+
+    # No explicit concat module: preserve legacy behavior.
+    if len(samples) <= 1:
+        return _run_per_sample_all(raw_steps)
+    if analysis_mode_norm == "per_sample":
+        return _run_per_sample_all(raw_steps)
+    return _run_with_concat_module([], raw_steps, concat_is_implicit=True)
 
 
 def _handle(method: str, params: Any) -> Any:

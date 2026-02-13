@@ -93,6 +93,20 @@ struct PipelineRunSummary: Codable, Hashable {
     var results: [SampleRunResult]
 }
 
+enum SampleDataType: String, CaseIterable, Identifiable, Codable, Hashable {
+    case singleCell = "single_cell"
+    case bulkRNASeqFastq = "bulk_rna_seq_fastq"
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .singleCell: return "Single-cell"
+        case .bulkRNASeqFastq: return "Bulk RNA-seq (FASTQ)"
+        }
+    }
+}
+
 enum AnalysisMode: String, CaseIterable, Identifiable, Codable, Hashable {
     case concat = "concat"
     case perSample = "per_sample"
@@ -111,6 +125,7 @@ struct SampleMetadata: Identifiable, Codable, Hashable {
     var id: UUID = UUID()
     var sample: String
     var group: String
+    var dataType: SampleDataType = .singleCell
     var path: String
     // e.g. "scanpy.read_10x_mtx"; empty means "auto"
     var reader: String

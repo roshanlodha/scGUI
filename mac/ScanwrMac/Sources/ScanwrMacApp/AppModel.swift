@@ -6,6 +6,7 @@ final class AppModel: ObservableObject {
     nonisolated static let canvasGridSpacing: CGFloat = 18
     nonisolated static let canvasNodeSize = CGSize(width: 260, height: 46)
     nonisolated static let canvasPortInsetX: CGFloat = 14
+    nonisolated static let concatSpecId: String = "scanwr.concat"
 
     @Published var availableModules: [ModuleSpec] = []
     @Published var isLoadingModules: Bool = false
@@ -23,7 +24,13 @@ final class AppModel: ObservableObject {
     @Published var canvasVisibleRect: CGRect = .zero
 
     // Project + metadata
-    @Published var samples: [SampleMetadata] = []
+    @Published var samples: [SampleMetadata] = [] {
+        didSet {
+            Task { @MainActor in
+                self.ensureConcatNodeInsertedIfNeeded()
+            }
+        }
+    }
     @Published var outputDirectory: String = ""
     @Published var projectName: String = "scGUI-project"
     @Published var recentProjects: [String] = []
@@ -41,9 +48,6 @@ final class AppModel: ObservableObject {
 
     // App settings
     @Published var verbosity: Int = 3
-    @Published var analysisMode: AnalysisMode = .concat {
-        didSet { UserDefaults.standard.set(analysisMode.rawValue, forKey: "scgui.analysisMode") }
-    }
     @Published var forceRerun: Bool = false {
         didSet { UserDefaults.standard.set(forceRerun, forKey: "scgui.pipelineBuilder.forceRerun") }
     }
@@ -123,14 +127,6 @@ final class AppModel: ObservableObject {
             verbosity = max(0, min(4, v))
         } else {
             verbosity = 3
-        }
-
-        if let raw = UserDefaults.standard.string(forKey: "scgui.analysisMode"),
-           let m = AnalysisMode(rawValue: raw)
-        {
-            analysisMode = m
-        } else {
-            analysisMode = .concat
         }
 
         forceRerun = UserDefaults.standard.bool(forKey: "scgui.pipelineBuilder.forceRerun")
@@ -406,6 +402,32 @@ final class AppModel: ObservableObject {
         let stepX = Self.canvasNodeSize.width + Self.canvasGridSpacing * 6
         let pos = CGPoint(x: base.x + CGFloat(nodes.count) * stepX, y: base.y)
         _ = addNode(spec: spec, at: pos)
+        rebuildLinksLinear()
+    }
+
+    private func ensureConcatNodeInsertedIfNeeded() {
+        guard samples.count > 1 else { return }
+        guard !nodes.contains(where: { $0.specId == Self.concatSpecId }) else { return }
+
+        let stepX = Self.canvasNodeSize.width + Self.canvasGridSpacing * 6
+        let y = nodes.first.map { CGFloat($0.position.y) } ?? 160
+        let minX = nodes.map { CGFloat($0.position.x) }.min() ?? 220
+        let insertX = minX - stepX
+
+        if !nodes.isEmpty {
+            for idx in nodes.indices {
+                nodes[idx].position = CGPointCodable(
+                    CGPoint(
+                        x: CGFloat(nodes[idx].position.x) + stepX,
+                        y: CGFloat(nodes[idx].position.y)
+                    )
+                )
+            }
+        }
+
+        let pos = snapToCanvasGrid(CGPoint(x: insertX, y: y))
+        let node = PipelineNode(specId: Self.concatSpecId, position: CGPointCodable(pos), params: defaultParams(for: Self.concatSpecId))
+        nodes.insert(node, at: 0)
         rebuildLinksLinear()
     }
 
@@ -702,6 +724,7 @@ final class AppModel: ObservableObject {
         links = t.links.map { $0.toLink() }
         selectedNodeId = nil
         normalizePipelineToLinearChain()
+        ensureConcatNodeInsertedIfNeeded()
         appendLog("Applied template: \(t.name)")
     }
 
@@ -729,7 +752,6 @@ final class AppModel: ObservableObject {
             var projectName: String
             var samples: [SampleMetadata]
             var steps: [PipelineStep]
-            var analysisMode: String
             var forceRerun: Bool
         }
         struct PipelineStep: Codable {
@@ -747,7 +769,6 @@ final class AppModel: ObservableObject {
                     projectName: "",
                     samples: samples,
                     steps: steps,
-                    analysisMode: analysisMode.rawValue,
                     forceRerun: forceRerun
                 )
             )

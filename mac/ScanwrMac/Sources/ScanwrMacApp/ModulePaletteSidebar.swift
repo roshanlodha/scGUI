@@ -20,14 +20,6 @@ struct ModulePaletteSidebar: View {
 
             GroupBox("Run Settings") {
                 VStack(alignment: .leading, spacing: 10) {
-                    ToggleRow(
-                        title: "Combine Samples",
-                        isOn: Binding<Bool>(
-                            get: { model.analysisMode == .concat },
-                            set: { model.analysisMode = $0 ? .concat : .perSample }
-                        )
-                    )
-
                     ToggleRow(title: "Force Rerun", isOn: $model.forceRerun)
                         .help("Ignores cached checkpoints and reruns from step 1.")
                 }
